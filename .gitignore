@@ -1,0 +1,15 @@
+# Gradle
+.gradle/
+build/
+local.properties
+.kotlin/
+
+# IDE
+.idea/
+*.iml
+
+# Release signing. Never commit any of these: the release workflow rebuilds
+# keystore.properties on the runner from repository secrets.
+keystore.properties
+*.jks
+*.keystore

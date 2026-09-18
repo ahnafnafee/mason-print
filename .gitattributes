@@ -1,0 +1,10 @@
+# Normalize to LF in the repository. `gradlew` is run by /bin/sh on the CI runners, and a CRLF
+# copy fails there with a "bad interpreter" error that reads like a missing file.
+* text=auto eol=lf
+
+*.bat text eol=crlf
+
+*.jar binary
+*.png binary
+*.jks binary
+*.keystore binary

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Campus print servers are frequently served with internally-issued certificates.
+  The stock app answered every TLS error with Proceed() (silent); this app keeps the
+  user/CA anchors available and additionally implements explicit trust-on-first-use with a
+  fingerprint prompt (see data/net/TofuTrustManager.kt), so the prompt is deliberate and
+  recorded rather than swallowed. One trust store for the API *and* the WebView screens.
+-->
+<network-security-config>
+    <!--
+      cleartext stays available because the stock client's own host rule allows plain http
+      only when the user explicitly typed port 80 (CLONE-PLAN §5 "Connection"); the client
+      enforces that rule, this file only keeps the anchors explicit.
+    -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
+</network-security-config>

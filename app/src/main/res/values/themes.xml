@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Compose draws everything; the platform theme only has to be chrome-free. AppCompat is not a
+      dependency, so this uses the platform Material theme.
+
+      There is deliberately no values-night twin. The app's light/dark choice is its own setting and
+      can disagree with the phone, so a resource qualifier would pick the wrong one exactly when the
+      user has overridden it. MainActivity paints the startup window background from the resolved
+      choice instead, which is why windowBackground here is only a fallback for the first frame
+      before that runs.
+    -->
+    <style name="Theme.MasonPrint" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowBackground">@android:color/background_light</item>
+    </style>
+</resources>

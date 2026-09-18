@@ -1,0 +1,181 @@
+package dev.ahnafnafee.masonprint.data.prefs
+
+import android.content.Context
+import android.content.SharedPreferences
+import dev.ahnafnafee.masonprint.data.net.TrustedCertificate
+import dev.ahnafnafee.masonprint.data.net.TlsTrustStore
+
+/**
+ * Everything that is *not* a secret, in plain `SharedPreferences`.
+ *
+ * Deliberately synchronous and deliberately not DataStore: [TlsTrustStore.isTrusted] is called
+ * from inside the JSSE handshake, which happens on OkHttp's thread with no coroutine context and
+ * cannot await anything. The set is tiny (a hostname, a version string, a handful of approved
+ * fingerprints), so the synchronous read costs nothing. Secrets stay in
+ * [dev.ahnafnafee.masonprint.data.store.SecureStore].
+ */
+class AppPrefs(context: Context) {
+
+    private val prefs: SharedPreferences =
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+
+    /** Last server the user configured. Empty on first run, which routes to the connect screen. */
+    var host: String
+        get() = prefs.getString(KEY_HOST, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_HOST, value).apply()
+
+    /**
+     * Cache-busting tick the stock app appended to the Print Center URL. Kept as a stored value so
+     * a restored session reloads the SPA rather than reusing a WebView cache that no longer matches
+     * its own session cookie (docs/FINDINGS.md §8.2).
+     */
+    var lastApiVersion: String?
+        get() = prefs.getString(KEY_API_VERSION, null)
+        set(value) = prefs.edit().putString(KEY_API_VERSION, value).apply()
+
+    var lastUserName: String?
+        get() = prefs.getString(KEY_LAST_USER, null)
+        set(value) = prefs.edit().putString(KEY_LAST_USER, value).apply()
+
+    /**
+     * The account whose preferences to restore before the server has answered, so a warm start does
+     * not briefly show the wrong funding source.
+     */
+    var lastAccount: String?
+        get() = prefs.getString(KEY_LAST_ACCOUNT, null)
+        set(value) = prefs.edit().putString(KEY_LAST_ACCOUNT, value).apply()
+
+    /**
+     * The funding source an account last used: a cost-centre code, or null for their own balance.
+     * Worth remembering because a student who charges to a department code types the same handful of
+     * digits every single day.
+     *
+     * Keyed **per account** ([dev.ahnafnafee.masonprint.data.model.PharosUser.accountKey]) rather than stored
+     * once: on a shared phone a single global default would charge one student's printing to another
+     * student's department. It deliberately outlives sign-out, which is the whole point — logging
+     * back in should land on the department you always use.
+     */
+    fun costCenterFor(account: String): String? = prefs.getString(KEY_COST_CENTER + account, null)
+
+    fun setCostCenterFor(account: String, code: String?) {
+        prefs.edit().apply {
+            if (code == null) remove(KEY_COST_CENTER + account) else putString(KEY_COST_CENTER + account, code)
+        }.apply()
+    }
+
+    /**
+     * Light, dark, or follow the phone. Stored for the device rather than the account: switching
+     * accounts must not restyle the app, and it has to survive sign-out.
+     */
+    var themeMode: String?
+        get() = prefs.getString(KEY_THEME, null)
+        set(value) = prefs.edit().putString(KEY_THEME, value).apply()
+
+    /** Diagnostics is opt-in: a log buffer that keeps response bodies can hold document titles. */
+    var diagnosticsEnabled: Boolean
+        get() = prefs.getBoolean(KEY_DIAGNOSTICS, false)
+        set(value) = prefs.edit().putBoolean(KEY_DIAGNOSTICS, value).apply()
+
+    /**
+     * The last printer list, JSON-encoded (a `List<Device>`). Printers are stable, so caching the
+     * list lets the release screen paint instantly on a warm start instead of waiting on a fetch.
+     * Not a secret — printer names and locations are public — and always superseded by a live load.
+     */
+    var cachedDevicesJson: String?
+        get() = prefs.getString(KEY_DEVICES, null)
+        set(value) = prefs.edit().putString(KEY_DEVICES, value).apply()
+
+    // -- TLS approvals -------------------------------------------------------------
+
+    /**
+     * Approved certificates, encoded one-per-string so the set survives a prefs schema that has
+     * no room for objects. `subject` may contain no `|` in practice (RFC 4514 uses `,` and `=`),
+     * and it is only ever displayed, never parsed back into anything security-relevant — the
+     * decision keys on host + fingerprint alone.
+     */
+    fun trustedCertificates(): List<TrustedCertificate> =
+        prefs.getStringSet(KEY_TRUSTS, emptySet()).orEmpty().mapNotNull { raw ->
+            val parts = raw.split('|')
+            if (parts.size < 3) return@mapNotNull null
+            TrustedCertificate(
+                host = parts[0],
+                fingerprint = parts[1],
+                subject = parts[2].takeIf { it.isNotEmpty() && it != "-" },
+                addedAtEpochMs = parts.getOrNull(3)?.toLongOrNull() ?: 0L,
+            )
+        }
+
+    fun setTrustedCertificates(list: List<TrustedCertificate>) {
+        val encoded = list.map {
+            "${it.host}|${it.fingerprint}|${it.subject ?: "-"}|${it.addedAtEpochMs}"
+        }.toSet()
+        prefs.edit().putStringSet(KEY_TRUSTS, encoded).apply()
+    }
+
+    /** Sign-out destroys the session but must not silently forget a certificate the user approved. */
+    fun forgetEverything() {
+        prefs.edit().clear().apply()
+    }
+
+    private companion object {
+        const val FILE = "masonprint_prefs"
+        const val KEY_HOST = "host"
+        const val KEY_API_VERSION = "api_version"
+        const val KEY_LAST_USER = "last_user"
+        /** A prefix, not a key: the account id is appended (see [costCenterFor]). */
+        const val KEY_COST_CENTER = "cost_center::"
+        const val KEY_LAST_ACCOUNT = "last_account"
+        const val KEY_THEME = "theme_mode"
+        const val KEY_DIAGNOSTICS = "diagnostics"
+        const val KEY_TRUSTS = "trusted_certs"
+        const val KEY_DEVICES = "cached_devices"
+    }
+}
+
+/**
+ * [TlsTrustStore] over [AppPrefs].
+ *
+ * The in-memory copy is authoritative for reads (the handshake must not touch disk) and is
+ * refreshed on every write; the prefs copy is loaded once at construction. Revoking from the
+ * Account screen therefore takes effect on the next handshake, not the one in flight.
+ */
+class PrefsTlsTrustStore(private val prefs: AppPrefs) : TlsTrustStore {
+
+    private val lock = Any()
+
+    @Volatile private var certs: List<TrustedCertificate> = prefs.trustedCertificates()
+
+    @Volatile private var host: String? = null
+
+    override fun isTrusted(host: String, fingerprint: String): Boolean =
+        certs.any { it.host.equals(host, true) && it.fingerprint.equals(fingerprint, true) }
+
+    override fun currentHost(): String? = host
+
+    override fun setHost(host: String) {
+        this.host = host
+    }
+
+    override fun all(): List<TrustedCertificate> = certs
+
+    override fun trust(cert: TrustedCertificate) = synchronized(lock) {
+        if (!isTrusted(cert.host, cert.fingerprint)) {
+            val next = certs + cert
+            certs = next
+            prefs.setTrustedCertificates(next)
+        }
+    }
+
+    override fun revoke(host: String, fingerprint: String) = synchronized(lock) {
+        val next = certs.filterNot { it.host.equals(host, true) && it.fingerprint.equals(fingerprint, true) }
+        if (next.size != certs.size) {
+            certs = next
+            prefs.setTrustedCertificates(next)
+        }
+    }
+
+    override fun clear() = synchronized(lock) {
+        certs = emptyList()
+        prefs.setTrustedCertificates(emptyList())
+    }
+}

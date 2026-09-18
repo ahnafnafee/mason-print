@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- allowBackup=false: the session blob (basic credentials + UserUri + cookies) must not ride
+     into an adb/auto backup. The stock app shipped allowBackup=true with plaintext prefs. -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="." />
+    <exclude domain="file" path="datastore" />
+</full-backup-content>

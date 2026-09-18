@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      The adaptive icon's background layer. It is a flat fill, so it is a colour rather than a
+      bitmap: identical on screen and one asset lighter. #006633 is Mason Green (PMS 349), the same
+      primary the app theme uses. It replaced an off-palette blue that matched nothing in the app.
+    -->
+    <color name="ic_launcher_background">#006633</color>
+</resources>

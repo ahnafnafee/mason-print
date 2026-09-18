@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Redacted log export for the service desk (fixes U13: the stock app's DebugTrace logs nothing). -->
+    <cache-path name="logs" path="logs/" />
+</paths>
