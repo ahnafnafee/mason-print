@@ -137,7 +137,7 @@ class PharosClient(
      * clone sends both rather than learning which campus needs which the hard way.
      *
      * The success body **is** the user object. On GMU it carries no `UserUri` key at all — the
-     * user's own resource arrives as `"Location":"/users/POYJ8x6E7Ias2Uj6cdAJZA2"`, a *relative*
+     * user's own resource arrives as `"Location":"/users/EXAMPLEuserUri000000A12"`, a *relative*
      * path, and `Location` is also the response header. `{UserUri}` therefore has to be built from
      * that, which is what [captureFromUser] does.
      *
@@ -652,7 +652,7 @@ class PharosClient(
 
     private fun captureFromUser(target: PharosTarget, user: PharosUser) {
         // A user object's own `Location` *is* `{UserUri}` on 4.x — GMU sends that and no `UserUri`
-        // key at all (live capture: `"Location":"/users/POYJ8x6E7Ias2Uj6cdAJZA2"`), so treating
+        // key at all (live capture: `"Location":"/users/EXAMPLEuserUri000000A12"`), so treating
         // `Location` as merely the print location left `{UserUri}` null and every money, cost-centre
         // and queue call failed with "sign in first" *after a successful sign-in*.
         (user.userUri ?: user.location)?.let { target.setUserUriFromValue(it) }
@@ -735,7 +735,7 @@ internal fun jobsUrl(user: HttpUrl, skip: Int, pageSize: Int): HttpUrl =
  *
  * This helper exists because posting the multipart body to `{UserUri}` itself is a *silent-looking*
  * mistake that is not silent at all: on 2026-09-18 the clone POSTed a 1.67 MB PDF to
- * `https://mobileprint.gmu.edu/PharosAPI/users/POYJ8x6E7Ias2Uj6cdAJZA2` and GMU answered
+ * `https://mobileprint.gmu.edu/PharosAPI/users/EXAMPLEuserUri000000A12` and GMU answered
  * **405 with `allow: GET,DELETE,PATCH,PUT`** after the whole body had been uploaded. The document
  * never reached the server, so the queue stayed empty and the only sign of trouble was a status
  * code. Keep the segment.

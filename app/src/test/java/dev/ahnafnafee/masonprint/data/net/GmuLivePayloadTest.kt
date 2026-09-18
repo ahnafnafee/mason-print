@@ -52,13 +52,13 @@ class GmuLivePayloadTest {
     @Test
     fun `GMU's user object has no UserUri key - its own Location is the user resource`() {
         assertNull("live payload has no `UserUri`; parsing one would be fiction", logon["UserUri"])
-        assertEquals("/users/POYJ8x6E7Ias2Uj6cdAJZA2", user.location)
+        assertEquals("/users/EXAMPLEuserUri000000A12", user.location)
         assertNull(user.userUri)
         // …so this is the only way to find {UserUri}, and it is what PharosClient.captureFromUser does.
         val target = PharosTarget.parse("mobileprint.gmu.edu")!!
         (user.userUri ?: user.location)!!.also { target.setUserUriFromValue(it) }
         assertEquals(
-            "https://mobileprint.gmu.edu/PharosAPI/users/POYJ8x6E7Ias2Uj6cdAJZA2",
+            "https://mobileprint.gmu.edu/PharosAPI/users/EXAMPLEuserUri000000A12",
             target.userUri.toString(),
         )
     }
@@ -67,8 +67,8 @@ class GmuLivePayloadTest {
     fun `a relative Location is re-rooted under the API base because the absolute path 404s`() {
         val target = PharosTarget.parse("https://mobileprint.gmu.edu/PharosAPI")!!
         assertEquals(
-            "https://mobileprint.gmu.edu/PharosAPI/users/POYJ8x6E7Ias2Uj6cdAJZA2",
-            target.resolve("/users/POYJ8x6E7Ias2Uj6cdAJZA2").toString(),
+            "https://mobileprint.gmu.edu/PharosAPI/users/EXAMPLEuserUri000000A12",
+            target.resolve("/users/EXAMPLEuserUri000000A12").toString(),
         )
         // Measured: /PharosAPI/users/{id} → 200, /users/{id} → 404. Plain RFC-3986 resolution
         // produces the 404, which is why resolve() is not a plain resolver.
@@ -274,7 +274,7 @@ class GmuLivePayloadTest {
         val url = jobsUrl(target.userUri!!, 0, 50)
         assertEquals(
             "GMU's own endpoint table says `get {UserUri}/printjobs` (script.min.js:1@1316092)",
-            "/PharosAPI/users/POYJ8x6E7Ias2Uj6cdAJZA2/printjobs",
+            "/PharosAPI/users/EXAMPLEuserUri000000A12/printjobs",
             url.encodedPath,
         )
         assertEquals("0", url.queryParameter("Skip"))
@@ -291,7 +291,7 @@ class GmuLivePayloadTest {
         val target = PharosTarget.parse("mobileprint.gmu.edu")!!
         target.setUserUriFromValue(user.location!!)
         assertEquals(
-            "/PharosAPI/users/POYJ8x6E7Ias2Uj6cdAJZA2/printjobs",
+            "/PharosAPI/users/EXAMPLEuserUri000000A12/printjobs",
             uploadUrl(target.userUri!!).encodedPath,
         )
         // Measured on 2026-09-18 with a real 1.67 MB PDF on a signed-in account: the same URL with
@@ -300,11 +300,11 @@ class GmuLivePayloadTest {
         // uploaded, the queue stays empty, and the only evidence is a status code — so the segment
         // is pinned here rather than discovered again on a phone.
         //
-        //     POST https://mobileprint.gmu.edu/PharosAPI/users/POYJ8x6E7Ias2Uj6cdAJZA2  -> 405
+        //     POST https://mobileprint.gmu.edu/PharosAPI/users/EXAMPLEuserUri000000A12  -> 405
         //     allow: GET,DELETE,PATCH,PUT
         assertFalse(
             "the upload URL must not be the user resource itself",
-            uploadUrl(target.userUri!!).encodedPath == "/PharosAPI/users/POYJ8x6E7Ias2Uj6cdAJZA2",
+            uploadUrl(target.userUri!!).encodedPath == "/PharosAPI/users/EXAMPLEuserUri000000A12",
         )
     }
 

@@ -21,16 +21,16 @@ class AccountKeyTest {
         )
 
     @Test fun `the server identifier wins, because it survives a rename`() {
-        assertEquals("POYJ8x6E7Ias2Uj6cdAJZA2", user("POYJ8x6E7Ias2Uj6cdAJZA2", "aannafee").accountKey)
+        assertEquals("EXAMPLEuserUri000000A12", user("EXAMPLEuserUri000000A12", "jdoe").accountKey)
     }
 
     @Test fun `the sign-in id is the fallback, case-folded`() {
-        assertEquals("aannafee", user(null, "aannafee").accountKey)
-        assertEquals("aannafee", user(null, "AAnnafee").accountKey)
+        assertEquals("jdoe", user(null, "jdoe").accountKey)
+        assertEquals("jdoe", user(null, "JDoe").accountKey)
     }
 
     @Test fun `a user with nothing identifying still yields a usable key`() {
-        assertEquals("096040", user(null, null, alias = "096040").accountKey)
+        assertEquals("000000", user(null, null, alias = "000000").accountKey)
         assertEquals("unknown", user(null, null).accountKey)
     }
 }

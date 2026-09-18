@@ -47,14 +47,14 @@ class PharosTarget private constructor(val root: HttpUrl) {
      * Accepts an absolute URL, an absolute path, or a bare path — and always lands the result
      * **under the API base**, because that is the only place the ARR rule lives.
      *
-     * GMU hands back `Location: /users/POYJ8x6E7Ias2Uj6cdAJZA2` (captured live). Read as an
+     * GMU hands back `Location: /users/EXAMPLEuserUri000000A12` (captured live). Read as an
      * RFC-3986 absolute path that means `https://mobileprint.gmu.edu/users/…`, which IIS answers
      * with **404**; rooted under `/PharosAPI` instead it is 200. Verified side by side against
      * production, so this deliberately does *not* do plain reference resolution:
      *
      * ```
-     * 200  https://mobileprint.gmu.edu/PharosAPI/users/POYJ8x6E7Ias2Uj6cdAJZA2
-     * 404  https://mobileprint.gmu.edu/users/POYJ8x6E7Ias2Uj6cdAJZA2
+     * 200  https://mobileprint.gmu.edu/PharosAPI/users/EXAMPLEuserUri000000A12
+     * 404  https://mobileprint.gmu.edu/users/EXAMPLEuserUri000000A12
      * ```
      *
      * An absolute URL on the *internal* origin (`MPSROSMOBP.mesa.gmu.edu`, see

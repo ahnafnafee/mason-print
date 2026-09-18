@@ -56,7 +56,7 @@ data class PharosUser(
      *
      * A real name when the server has one, otherwise the id they signed in with — which they typed
      * themselves and will recognise. `DisplayName` is trusted only when it actually contains a
-     * letter: GMU sets both it and `Alias` to the numeric campus id, and "096040" names nobody.
+     * letter: GMU sets both it and `Alias` to the numeric campus id, and "000000" names nobody.
      */
     val preferredName: String
         get() = fullName
@@ -659,7 +659,7 @@ data class Transaction(
 
     /**
      * GMU does not write a sentence into `Description`. On 2026-09-18 the live statement for
-     * `aannafee` posted, for a print charge, the page-counter transcript itself —
+     * `jdoe` posted, for a print charge, the page-counter transcript itself —
      * `"I-94.pdf&#10;1 page of 612x792,Color,Letter,Simplex"` — i.e. the document name, an
      * entity-encoded line feed, and the raw `RawPageCounterResult` line. (`evidence/
      * port-09-account.xml`; the entity is why the first render of this screen printed a literal
