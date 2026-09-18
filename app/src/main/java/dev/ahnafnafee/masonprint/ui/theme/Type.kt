@@ -13,27 +13,36 @@ import androidx.compose.ui.unit.sp
 import dev.ahnafnafee.masonprint.R
 
 /**
- * Google Sans Flex with the roundness axis driven to its maximum, which is what produces the soft
- * letterforms of the Material 3 Expressive look. One [Font] per weight, so the variable axis is
- * pinned alongside each [FontWeight] rather than synthesised.
+ * DM Sans, variable, at 240 KB.
+ *
+ * A geometric sans with the open counters and low contrast the Expressive look asks for. The point
+ * of taking the variable cut is that this scale asks for four weights: every one of them is drawn
+ * by the font here, where a single static cut would have the renderer synthesise the other three by
+ * smearing the one it has.
+ *
+ * `opsz` is pinned rather than left at its default. The axis is the designer's compensation for
+ * size, tighter spacing and higher contrast as text grows, and DM Sans defaults it to 9, the small
+ * end. Android does not track it automatically the way a browser's `font-optical-sizing: auto`
+ * does, so leaving the default would set the 45 sp balance in a face drawn for footnotes. 14 is the
+ * middle of where this app actually sets text.
  */
-private const val RoundAxis = 100f
+private const val OpticalSize = 14f
 
 @OptIn(ExperimentalTextApi::class)
-private fun rounded(weight: FontWeight) = Font(
-    R.font.google_sans_flex,
+private fun dmSans(weight: FontWeight) = Font(
+    R.font.dm_sans,
     weight = weight,
     variationSettings = FontVariation.Settings(
         FontVariation.weight(weight.weight),
-        FontVariation.Setting("ROND", RoundAxis),
+        FontVariation.Setting("opsz", OpticalSize),
     ),
 )
 
-val GoogleSansRounded = FontFamily(
-    rounded(FontWeight.Normal),
-    rounded(FontWeight.Medium),
-    rounded(FontWeight.SemiBold),
-    rounded(FontWeight.Bold),
+val DmSans = FontFamily(
+    dmSans(FontWeight.Normal),
+    dmSans(FontWeight.Medium),
+    dmSans(FontWeight.SemiBold),
+    dmSans(FontWeight.Bold),
 )
 
 /**
@@ -83,7 +92,7 @@ object MasonType {
      * number.
      */
     val money = TextStyle(
-        fontFamily = GoogleSansRounded,
+        fontFamily = DmSans,
         fontWeight = FontWeight.Bold,
         fontSize = 19.sp,
         lineHeight = 21.sp,
@@ -92,7 +101,7 @@ object MasonType {
 
     /** The live cost readout in the upload sheet's cost dock. 24 / 32 · 700. */
     val monoCost = TextStyle(
-        fontFamily = GoogleSansRounded,
+        fontFamily = DmSans,
         fontWeight = FontWeight.Bold,
         fontSize = 24.sp,
         lineHeight = 32.sp,
@@ -122,11 +131,11 @@ object MasonType {
  *
  * Two things about the type table that survive into this file as deliberate choices:
  *
- *  * **Weights of 420 / 480 / 520 are `wght` axis positions, not named weights.** [GoogleSansRounded]
- *    is variable and pins `wght` per weight, so each role below takes the nearest named weight and
- *    the in-between positions are available by adding a `FontVariation.weight` to that role's
- *    [Font]. The *relationships* in the scale, hero above title above body above caption, are what
- *    make the hierarchy readable at a printer, and they hold at either resolution.
+ *  * **Weights of 420 / 480 / 520 are `wght` axis positions, not named weights.** [DmSans] is
+ *    variable and pins `wght` per weight, so each role below takes the nearest named weight and an
+ *    in-between position is one `FontVariation.weight` away. The *relationships* in the scale, hero
+ *    above title above body above caption, are what make the hierarchy readable at a printer, and
+ *    they hold at either resolution.
  *
  *  * **The design puts the live cost readout on `headlineSmall`, which it does not own.** Every
  *    `AlertDialog` title in Material 3 renders in `headlineSmall`, so honouring that row literally
@@ -139,7 +148,7 @@ object MasonType {
  * The sub-12 roles are all wire detail and timestamps, which is exactly what the diagnostics screen
  * is for.
  */
-private val MasonFontFamily = GoogleSansRounded
+private val MasonFontFamily = DmSans
 
 val MasonTypography = Typography(
     displayLarge = TextStyle(

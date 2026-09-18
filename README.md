@@ -110,7 +110,7 @@ Every request, its status, and the server's own wording for a failure. When a ca
 
 Grab the signed APK from the [latest release][releases-link] and install it. You may need to allow installs from unknown sources for whichever app you download with.
 
-Requires **Android 8.0 (API 26)** or newer. The release APK is about 5 MB and universal, so there is one file for every phone. Roughly half of that is the variable font the interface is set in.
+Requires **Android 8.0 (API 26)** or newer. The release APK is about 3 MB and universal, so there is one file for every phone.
 
 > \[!TIP]
 > The barcode model is delivered by Google Play Services rather than bundled, which is most of why the download is small. Play Services fetches it at install time, so the first scan at a printer does not wait on it.
@@ -180,7 +180,7 @@ Campus print servers are often served with internally issued certificates. Rathe
 | --- | --- |
 | Language | Kotlin 2.4 |
 | UI | Jetpack Compose, Material 3 Expressive |
-| Type | Google Sans Flex, roundness axis at maximum, tabular figures on every price |
+| Type | DM Sans, variable, with tabular figures on every price |
 | Navigation | A hand-written back stack. 17 routes and one `when`, no Navigation Compose. |
 | DI | A hand-written `AppGraph`. No Hilt. |
 | HTTP | OkHttp 5, with hand-rolled JSON parsing because this API is inconsistent about casing |
@@ -291,6 +291,8 @@ Issues and pull requests are welcome. CI runs unit tests, lint, and a debug buil
 ## 🙏 Acknowledgements
 
 Built on [Jetpack Compose][compose-link] and [Material 3 Expressive](https://m3.material.io/), with [OkHttp](https://square.github.io/okhttp/) doing the talking.
+
+Set in [DM Sans](https://fonts.google.com/specimen/DM+Sans) by Colophon Foundry, Jonny Pinhorn and Indian Type Foundry, used under the SIL Open Font License ([full text](licenses/DMSans-OFL.txt)).
 
 "George Mason University" and "Pharos" are the marks of their respective owners and are used here only to say what this app talks to.
 
