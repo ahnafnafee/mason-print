@@ -22,6 +22,21 @@ Send documents from your phone, walk to any campus printer, scan its code, and p
 [![][downloads-shield]][releases-link]
 [![][license-shield]][license-link]
 
+<table>
+  <tr>
+    <td align="center"><b>Sign in</b></td>
+    <td align="center"><b>Print queue</b></td>
+    <td align="center"><b>Pick a printer</b></td>
+    <td align="center"><b>Dark theme</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/signin.png" width="200" alt="Sign-in screen with the George Mason wordmark, a card explaining that you pay at the printer, and username and password fields" /></td>
+    <td><img src="docs/screenshots/queue.png" width="200" alt="Print queue showing the printing balance and three held documents, each with its sheet and page count and the price it will cost at release" /></td>
+    <td><img src="docs/screenshots/printers.png" width="200" alt="Printer picker with tabs for browsing, scanning a code and typing a code, listing campus printers grouped by building and floor" /></td>
+    <td><img src="docs/screenshots/queue-dark.png" width="200" alt="The same print queue rendered in the dark theme" /></td>
+  </tr>
+</table>
+
 </div>
 
 > \[!NOTE]
@@ -95,7 +110,7 @@ Every request, its status, and the server's own wording for a failure. When a ca
 
 Grab the signed APK from the [latest release][releases-link] and install it. You may need to allow installs from unknown sources for whichever app you download with.
 
-Requires **Android 8.0 (API 26)** or newer. The release APK is around 3 MB and universal, so there is one file for every phone.
+Requires **Android 8.0 (API 26)** or newer. The release APK is about 5 MB and universal, so there is one file for every phone. Roughly half of that is the variable font the interface is set in.
 
 > \[!TIP]
 > The barcode model is delivered by Google Play Services rather than bundled, which is most of why the download is small. Play Services fetches it at install time, so the first scan at a printer does not wait on it.
@@ -165,6 +180,7 @@ Campus print servers are often served with internally issued certificates. Rathe
 | --- | --- |
 | Language | Kotlin 2.4 |
 | UI | Jetpack Compose, Material 3 Expressive |
+| Type | Google Sans Flex, roundness axis at maximum, tabular figures on every price |
 | Navigation | A hand-written back stack. 17 routes and one `when`, no Navigation Compose. |
 | DI | A hand-written `AppGraph`. No Hilt. |
 | HTTP | OkHttp 5, with hand-rolled JSON parsing because this API is inconsistent about casing |
