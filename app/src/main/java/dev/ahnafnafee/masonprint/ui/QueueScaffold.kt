@@ -176,45 +176,58 @@ internal fun QueueScaffold(
             )
         },
         bottomBar = {
-            // `navigationBarsPadding`, not the Scaffold's defaults: a plain Column in the bottomBar
-            // slot gets no inset handling of its own, and edge-to-edge is on — without this the
-            // release affordance and the FAB sit under the gesture bar.
-            Column(Modifier.fillMaxWidth().navigationBarsPadding()) {
-                /*
-                 * The two things a student does here, as two buttons of the same size and shape so
-                 * neither reads as "the real one": Upload is filled because it is where you start, and
-                 * Release is tonal because it is what you do later, at the machine. Both hide while a
-                 * selection is up — the selection bar below owns the actions then.
-                 */
-                AnimatedVisibility(
-                    visible = !selecting,
-                    enter = fadeIn(if (reduced) snap() else MaterialTheme.motionScheme.defaultEffectsSpec()),
-                    exit = fadeOut(if (reduced) snap() else MaterialTheme.motionScheme.fastEffectsSpec()),
-                ) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 10.dp),
-                        // Sized to their labels, not split 50/50: an equal split truncated this one to
-                        // "Release at a pri…". Same component, height and shape is what makes them a
-                        // matched pair — equal width is not worth an ellipsis.
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
+            /*
+             * A surface with a shadow, not a bare Column on the background. The queue scrolls
+             * underneath this bar, and with both painted the same colour the last card appeared to
+             * dissolve into the buttons. The shadow is cast on all four edges but only the top one
+             * is ever on screen, so the whole effect is the soft line of depth the list needs to
+             * pass behind.
+             *
+             * `navigationBarsPadding`, not the Scaffold's defaults: a plain Column in the bottomBar
+             * slot gets no inset handling of its own, and edge-to-edge is on, so without this the
+             * release affordance and the upload button sit under the gesture bar.
+             */
+            Surface(
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 8.dp,
+            ) {
+                Column(Modifier.fillMaxWidth().navigationBarsPadding()) {
+                    /*
+                     * The two things a student does here, as two buttons of the same size and shape so
+                     * neither reads as "the real one": Upload is filled because it is where you start, and
+                     * Release is tonal because it is what you do later, at the machine. Both hide while a
+                     * selection is up — the selection bar below owns the actions then.
+                     */
+                    AnimatedVisibility(
+                        visible = !selecting,
+                        enter = fadeIn(if (reduced) snap() else MaterialTheme.motionScheme.defaultEffectsSpec()),
+                        exit = fadeOut(if (reduced) snap() else MaterialTheme.motionScheme.fastEffectsSpec()),
                     ) {
-                        FilledTonalButton(onClick = { router.push(Route.Release) }) {
-                            ButtonGlyph(Icons.Filled.QrCodeScanner)
-                            Text("Release at a printer", maxLines = 1)
-                        }
-                        Button(onClick = onPickDocument) {
-                            ButtonGlyph(Icons.Filled.UploadFile)
-                            Text("Upload")
+                        Row(
+                            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 10.dp),
+                            // Sized to their labels, not split 50/50: an equal split truncated this one to
+                            // "Release at a pri…". Same component, height and shape is what makes them a
+                            // matched pair — equal width is not worth an ellipsis.
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            FilledTonalButton(onClick = { router.push(Route.Release) }) {
+                                ButtonGlyph(Icons.Filled.QrCodeScanner)
+                                Text("Release at a printer", maxLines = 1)
+                            }
+                            Button(onClick = onPickDocument) {
+                                ButtonGlyph(Icons.Filled.UploadFile)
+                                Text("Upload")
+                            }
                         }
                     }
+                    QueueSelectionBar(
+                        state = state,
+                        selecting = selecting,
+                        reduced = reduced,
+                        selection = selection,
+                    )
                 }
-                QueueSelectionBar(
-                    state = state,
-                    selecting = selecting,
-                    reduced = reduced,
-                    selection = selection,
-                )
             }
         },
     ) { padding ->

@@ -758,7 +758,17 @@ private fun JobRow(
         border = if (checked) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(Modifier.padding(start = 12.dp, end = 14.dp, top = 12.dp, bottom = 12.dp)) {
-            Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            /*
+             * Centred, not top-aligned. The trailing preview control is an `IconButton`, whose 24 dp
+             * glyph sits in the middle of a 48 dp touch target it cannot give up without dropping
+             * below the minimum. Top-aligning the row therefore lines up the checkbox and the price
+             * with the title while leaving that one glyph a dozen dp lower, which reads as a
+             * mistake. Centring is also what `ListItem` does with its own leading and trailing slots.
+             */
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
                 /*
                  * An always-visible checkbox. The card was already selectable, but it showed nothing
                  * to say so until *after* it had been selected — and a queue that cannot be released
@@ -901,10 +911,16 @@ private fun specLine(job: PrintJob): String {
             fin.pagesPerSide?.takeIf { it > 1 }?.let { "$it per side" },
         ).joinToString(" · ").ifBlank { null }
     }
+    /*
+     * A comma joins the two halves, not a third interpunct. The line is too long for a narrow card
+     * either way, and the wrap falls at a space: an interpunct left at the end of a line reads as a
+     * fact that went missing, where a comma in the same position is invisible. The interpuncts
+     * inside `pageSummary` are safe because that half wraps as a unit.
+     */
     return listOfNotNull(
         job.pageSummary.takeIf { it.isNotBlank() },
         finishing,
-    ).joinToString("  ·  ")
+    ).joinToString(", ")
 }
 
 /** "Sent 4 minutes ago · expires in 6 days", built from the server's own fields. */

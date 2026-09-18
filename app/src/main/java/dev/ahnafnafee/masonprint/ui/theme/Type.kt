@@ -2,11 +2,39 @@ package dev.ahnafnafee.masonprint.ui.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import dev.ahnafnafee.masonprint.R
+
+/**
+ * Google Sans Flex with the roundness axis driven to its maximum, which is what produces the soft
+ * letterforms of the Material 3 Expressive look. One [Font] per weight, so the variable axis is
+ * pinned alongside each [FontWeight] rather than synthesised.
+ */
+private const val RoundAxis = 100f
+
+@OptIn(ExperimentalTextApi::class)
+private fun rounded(weight: FontWeight) = Font(
+    R.font.google_sans_flex,
+    weight = weight,
+    variationSettings = FontVariation.Settings(
+        FontVariation.weight(weight.weight),
+        FontVariation.Setting("ROND", RoundAxis),
+    ),
+)
+
+val GoogleSansRounded = FontFamily(
+    rounded(FontWeight.Normal),
+    rounded(FontWeight.Medium),
+    rounded(FontWeight.SemiBold),
+    rounded(FontWeight.Bold),
+)
 
 /**
  * The four monospace roles, plus the two money roles.
@@ -14,8 +42,13 @@ import androidx.compose.ui.unit.sp
  * M3 has no monospace slot at all, and this app is unusually mono-hungry: the wire detail (host,
  * API version, model numbers, session log) and the SHA-256 fingerprint are the text a student reads
  * aloud to the service desk, and a cost-centre code like `BUSD-CHEM-UG` has to be legible character
- * by character. Digits in particular must not be proportional — a balance that changes width as it
- * changes value makes a jittering animation out of a number nobody asked to move.
+ * by character.
+ *
+ * Money is the exception, and it used to be wrong. A price is read, never dictated, so the only
+ * thing it needs from a monospace face is that the digits share a width, and `tnum` on the
+ * proportional face gives exactly that. Actual monospace gave it the rest of the bargain too:
+ * `$0.20` set in a mono face puts a full character cell around the decimal point, so a two-digit
+ * price reads as three loose glyphs and a column of them looks torn rather than aligned.
  */
 object MasonType {
     /** Hosts, API version, model numbers, session log, capability values. 11 / 17 · 400. */
@@ -50,7 +83,7 @@ object MasonType {
      * number.
      */
     val money = TextStyle(
-        fontFamily = FontFamily.Monospace,
+        fontFamily = GoogleSansRounded,
         fontWeight = FontWeight.Bold,
         fontSize = 19.sp,
         lineHeight = 21.sp,
@@ -59,7 +92,7 @@ object MasonType {
 
     /** The live cost readout in the upload sheet's cost dock. 24 / 32 · 700. */
     val monoCost = TextStyle(
-        fontFamily = FontFamily.Monospace,
+        fontFamily = GoogleSansRounded,
         fontWeight = FontWeight.Bold,
         fontSize = 24.sp,
         lineHeight = 32.sp,
@@ -89,14 +122,11 @@ object MasonType {
  *
  * Two things about the type table that survive into this file as deliberate choices:
  *
- *  * **Weights of 420 / 480 / 520 are `wght` axis positions, not named weights.** They need a
- *    variable font. Nothing here bundles one — there is no network access at build time to fetch
- *    Roboto Flex and a half-megabyte TTF is a lot to add to a 1.7 MB APK — so each role is set to
- *    the nearest static weight and the axis is left as a drop-in: put the variable TTF in
- *    `res/font`, point `MasonFontFamily` at it, and add
- *    `fontVariationSettings = "'wght' 480"` to the roles that ask for an in-between weight. The
- *    *relationships* in the scale — hero above title above body above caption — hold either way,
- *    which is what makes the hierarchy readable at a printer.
+ *  * **Weights of 420 / 480 / 520 are `wght` axis positions, not named weights.** [GoogleSansRounded]
+ *    is variable and pins `wght` per weight, so each role below takes the nearest named weight and
+ *    the in-between positions are available by adding a `FontVariation.weight` to that role's
+ *    [Font]. The *relationships* in the scale, hero above title above body above caption, are what
+ *    make the hierarchy readable at a printer, and they hold at either resolution.
  *
  *  * **The design puts the live cost readout on `headlineSmall`, which it does not own.** Every
  *    `AlertDialog` title in Material 3 renders in `headlineSmall`, so honouring that row literally
@@ -105,11 +135,11 @@ object MasonType {
  *    the one place the implementation and the design's slot column disagree, and it is written down
  *    in `design/REDESIGN-SPEC.md` §2a rather than left as a silent substitution.
  *
- * Nothing on any screen is below 11 sp, and nothing below 12 sp carries meaning a student needs —
- * the sub-12 roles are all wire detail and timestamps, which is exactly what the diagnostics screen
+ * Nothing on any screen is below 11 sp, and nothing below 12 sp carries meaning a student needs.
+ * The sub-12 roles are all wire detail and timestamps, which is exactly what the diagnostics screen
  * is for.
  */
-private val MasonFontFamily = FontFamily.Default
+private val MasonFontFamily = GoogleSansRounded
 
 val MasonTypography = Typography(
     displayLarge = TextStyle(
