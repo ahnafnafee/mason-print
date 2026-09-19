@@ -19,7 +19,6 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -35,12 +34,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Add
@@ -61,6 +60,7 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Work
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -117,8 +117,9 @@ import java.time.format.FormatStyle
  *
  * This is the screen the whole app exists for: a list of documents that are already on a server,
  * being held for their owner, with money attached. Everything in the layout follows from that — the
- * balance is at the top because it decides whether the release at the bottom will work, and each row
- * is a whole tappable object rather than a checkbox waiting to be found.
+ * list gets the screen, funding is one row above it because it decides whether the release at the
+ * bottom will work, and each row is a whole tappable object rather than a checkbox waiting to be
+ * found.
  *
  * The frame (top bar, overflow, pull-to-refresh, the morphing button, the selection bar) is in
  * [QueueScaffold]; this file owns what scrolls inside it and every dialog the frame can ask for.
@@ -207,12 +208,13 @@ fun JobsScreen(
             contentPadding = MasonScreenPadding,
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item(key = "hero") {
+            item(key = "head") {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     /*
                      * Order is the prototype's (§3.5): what is happening now, then whether the data is
-                     * still true, then the balance, then the list. The strip and the offline card sit
-                     * *above* the balance because both of them change how the number should be read.
+                     * still true, then who pays, then the list. The strip and the offline card sit
+                     * *above* the list because both of them change how a release from it should be
+                     * read.
                      */
                     state.busy?.let { BusyStrip(it) }
 
@@ -242,7 +244,7 @@ fun JobsScreen(
                         FailureSummary(state.failure)
                     }
 
-                    BalanceHero(
+                    FundingStrip(
                         state = state,
                         reduced = reduced,
                         onChooseFunding = { fundingOpen = true },
@@ -372,10 +374,10 @@ private fun BusyStrip(label: String) {
     }
 }
 
-// --------------------------------------------------------------------------- hero
+// --------------------------------------------------------------------------- funding strip
 
 /**
- * Which balance story the hero is telling.
+ * Which funding story the strip is telling.
  *
  * The order is §5.6's precedence, and it is a *precedence* rather than a set of toggles because two
  * of these are claims about the same number. A cost centre in effect means the number on screen will
@@ -383,16 +385,16 @@ private fun BusyStrip(label: String) {
  * even from a stale read; and "this is a cache" outranks the purse breakdown because a stale purse
  * split is not a split you should plan on.
  */
-private enum class HeroVariant { Department, Arrears, Cached, Purses, Plain }
+private enum class FundingVariant { Department, Arrears, Cached, Purses, Plain }
 
-private fun heroVariantFor(state: AppState): HeroVariant {
+private fun fundingVariantFor(state: AppState): FundingVariant {
     val balance = state.user?.balance?.let { it.amount ?: it.total }
     return when {
-        state.costCenter?.isNotBlank() == true -> HeroVariant.Department
-        balance != null && balance < 0.0 -> HeroVariant.Arrears
-        state.stale -> HeroVariant.Cached
-        state.purseBreakdown.isNotEmpty() -> HeroVariant.Purses
-        else -> HeroVariant.Plain
+        state.costCenter?.isNotBlank() == true -> FundingVariant.Department
+        balance != null && balance < 0.0 -> FundingVariant.Arrears
+        state.stale -> FundingVariant.Cached
+        state.purseBreakdown.isNotEmpty() -> FundingVariant.Purses
+        else -> FundingVariant.Plain
     }
 }
 
@@ -401,23 +403,32 @@ private val SelectedCardRadius = 26.dp
 private val JobCardRadius = 20.dp
 
 /**
- * The balance hero, and the only place on this screen that states what will be charged.
+ * The balance and who pays, as one row.
  *
- * Its *identity* changes — container colour, eyebrow, sub-line, and which extra rows appear — and the
- * change is animated, because a hero that silently repaints from "your money" to "the department's
- * money" is the exact moment students get tricked by print software.
+ * This was a hero — a 45 sp number, a paragraph about when money moves, purse chips and a "Charged
+ * to" editor — which pushed the queue's first job card a third of the way down the screen. Every
+ * sentence the hero carried still exists where it does its work: "at release" is on every job row,
+ * the purse order and the campus-card distinction are in the funding picker (which is where "where
+ * printing money comes from" always pointed), a stale read is explained by the NoteCard directly
+ * above, and arrears escalates to an "Add funds" affordance right here.
  *
- * The number itself is `displayMedium` (45 / 52, tabular) and is never ellipsised: `$1,234.56` is the
- * thing the user came to read, and a hero that truncates it has failed at its one job.
+ * What is left is the pair of facts that decide the next release — how much is there, who it comes
+ * from — and a tap target the width of the screen, which is the control students use most here. The
+ * row-plus-chevron is [QueueScaffold]'s SettingRow pattern: a value that does not look tappable is a
+ * setting that may as well still be in the overflow menu.
+ *
+ * The variant still repaints and re-words the row, animated, because a strip that silently switches
+ * from "your money" to "the department's money" is the exact moment students get tricked by print
+ * software.
  */
 @Composable
-private fun BalanceHero(
+private fun FundingStrip(
     state: AppState,
     reduced: Boolean,
     onChooseFunding: () -> Unit,
     onAddFunds: () -> Unit,
 ) {
-    val variant = heroVariantFor(state)
+    val variant = fundingVariantFor(state)
 
     AnimatedContent(
         targetState = variant,
@@ -432,9 +443,9 @@ private fun BalanceHero(
             (fadeIn(fade) + slideInVertically(drift) { it / 6 })
                 .togetherWith(fadeOut(fade) + slideOutVertically(drift) { it / 6 })
         },
-        label = "balanceHero",
+        label = "fundingStrip",
     ) { which ->
-        HeroBody(
+        StripBody(
             state = state,
             variant = which,
             onChooseFunding = onChooseFunding,
@@ -444,9 +455,9 @@ private fun BalanceHero(
 }
 
 @Composable
-private fun HeroBody(
+private fun StripBody(
     state: AppState,
-    variant: HeroVariant,
+    variant: FundingVariant,
     onChooseFunding: () -> Unit,
     onAddFunds: () -> Unit,
 ) {
@@ -456,189 +467,124 @@ private fun HeroBody(
      * in greyscale or a colour-blind reading has to still get the same sentence.
      */
     val (container, content, outlined) = when (variant) {
-        HeroVariant.Department ->
+        FundingVariant.Department ->
             Triple(MaterialTheme.colorScheme.tertiaryContainer, MaterialTheme.colorScheme.onTertiaryContainer, false)
 
-        HeroVariant.Arrears ->
+        FundingVariant.Arrears ->
             Triple(MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer, false)
 
-        HeroVariant.Cached ->
+        FundingVariant.Cached ->
             Triple(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.onSurface, true)
 
-        HeroVariant.Purses ->
+        FundingVariant.Purses ->
             Triple(MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer, false)
 
-        HeroVariant.Plain ->
+        FundingVariant.Plain ->
             Triple(MaterialTheme.colorScheme.surfaceContainerHigh, MaterialTheme.colorScheme.onSurface, false)
     }
-
-    val eyebrow = when (variant) {
-        // The eyebrow sits directly above the number, so it has to name *that number* — which is
-        // always the student's own balance. Labelling it "charging to a cost center" while showing a
-        // personal balance is what made this read as two contradictory facts.
-        HeroVariant.Department -> "My printing balance"
-        // "In arrears" is accounting language. The eyebrow labels the number below it, and that
-        // number is negative, so it says so.
-        HeroVariant.Arrears -> "My printing balance is negative"
-        HeroVariant.Cached -> "Last known balance"
-        HeroVariant.Purses, HeroVariant.Plain -> "My printing balance"
-    }
     val icon = when (variant) {
-        HeroVariant.Department -> Icons.Filled.BusinessCenter
-        HeroVariant.Arrears -> Icons.Filled.Error
-        HeroVariant.Cached -> Icons.Filled.Schedule
-        HeroVariant.Purses -> Icons.Filled.Savings
-        HeroVariant.Plain -> Icons.Filled.AccountBalanceWallet
+        FundingVariant.Department -> Icons.Filled.BusinessCenter
+        FundingVariant.Arrears -> Icons.Filled.Error
+        FundingVariant.Cached -> Icons.Filled.Schedule
+        FundingVariant.Purses -> Icons.Filled.Savings
+        FundingVariant.Plain -> Icons.Filled.AccountBalanceWallet
     }
     val balance = state.balanceText ?: "—"
+    val purses = state.purseBreakdown
+    val department = state.costCenter?.takeIf { it.isNotBlank() }
+    val centre = department?.let { code ->
+        state.capabilities?.usableCostCenters?.firstOrNull { it.code.equals(code, true) }
+    }
 
     Surface(
-        onClick = if (variant == HeroVariant.Arrears) onAddFunds else onChooseFunding,
+        onClick = if (variant == FundingVariant.Arrears) onAddFunds else onChooseFunding,
         modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.extraLarge,
+        // `large` (16) — the NoteCard radius. The strip is a control, but it is not a job: one step
+        // quieter than a job card, one step louder than a plain row.
+        shape = MaterialTheme.shapes.large,
         color = container,
         contentColor = content,
         border = if (outlined) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant) else null,
     ) {
-        Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(icon, null, Modifier.size(18.dp))
-                // `textCase` is not in the resolvable compose-ui-text, so eyebrows are written in
-                // literal caps at the call site — the same convention SectionLabel uses.
-                Text(
-                    eyebrow.uppercase(),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = content,
-                )
-                if (variant == HeroVariant.Cached) {
-                    Spacer(Modifier.width(4.dp))
-                    FactChip(
-                        icon = Icons.Filled.Schedule,
-                        label = "${humanDuration(System.currentTimeMillis() - state.loadedAt)} old",
-                        tone = MasonTone.Neutral,
-                    )
-                }
-            }
+        Row(
+            Modifier.padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(icon, null, Modifier.size(20.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                /*
+                 * The label names the control. A row that states only a value — "$4.50", "10111" —
+                 * is an answer looking for its question, and one student's "what is this?" is
+                 * another's "it says 10111, is that my balance?". "PAY WITH" is the question, in
+                 * the same vocabulary as the selection bar's "Pay with" row and the picker's "Who
+                 * pays for this?", so the strip, the bar and the dialog are three sizes of one
+                 * control rather than three controls. (The old hero said "Charged to" here; the
+                 * bar's wording won because the strip sits beside that bar, not beside the hero.)
+                 */
+                Text("PAY WITH", style = MaterialTheme.typography.labelMedium, color = content)
+                /*
+                 * The number is shown only while the student's own purse is what would pay — the
+                 * variants where it gates the release. On a cost centre the personal balance does
+                 * not move, and a `$0.00` sitting next to a department code reads as the
+                 * department's $0.00, which is the confusion the old eyebrow existed to patch.
+                 */
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (variant == FundingVariant.Department) {
+                        Text(
+                            centre?.code ?: department ?: "",
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            modifier = Modifier.alignByBaseline(),
+                        )
+                        Text(
+                            "· " + (centre?.description ?: "Department account"),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = content,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.alignByBaseline().weight(1f, fill = false),
+                        )
+                    } else {
+                        Text(
+                            balance,
+                            style = MasonType.monoCost,
+                            maxLines = 1,
+                            modifier = Modifier.alignByBaseline(),
+                        )
+                        Text(
+                            when (variant) {
+                                FundingVariant.Arrears -> "below zero — what you owe"
+                                FundingVariant.Cached -> "last known balance"
+                                FundingVariant.Purses ->
+                                    purses.joinToString(" then ") { it.name }
 
-            Spacer(Modifier.height(6.dp))
-            Text(
-                balance,
-                style = MaterialTheme.typography.displayMedium,
-                color = content,
-                maxLines = 1,
-            )
-
-            Spacer(Modifier.height(2.dp))
-            val purses = state.purseBreakdown
-            val subline = when (variant) {
-                // Deliberately the same sentence as Plain. It used to read "$0.00 to me — 10111 pays",
-                // which put a second $0.00 next to the balance's $0.00 meaning something different.
-                // Who pays is stated once, by the funding row below.
-                HeroVariant.Department ->
-                    "You are charged when you release this at a printer, not now."
-
-                HeroVariant.Arrears ->
-                    "This is what you owe, not what you have. Money arrives through Atrium; this " +
-                        "server cannot take a card."
-
-                HeroVariant.Cached ->
-                    "Cached ${humanDuration(System.currentTimeMillis() - state.loadedAt)} ago. This is " +
-                        "not the live balance. A job released since then would have changed it."
-
-                HeroVariant.Purses ->
-                    purses.joinToString(" then ") { it.name } +
-                        ". The server spends them in that order; Mason Print only reports it."
-
-                HeroVariant.Plain ->
-                    "You are charged when you release this at a printer, not now."
-            }
-            Text(
-                subline,
-                style = MaterialTheme.typography.bodyMedium,
-                color = content,
-            )
-
-            /*
-             * Which purse this actually is.
-             *
-             * The print system keeps its own bank (`PrintCenter."Bank"`), separate from the campus
-             * card. A student holding money on their card and reading $0.00 here concludes the app
-             * is broken, which is the most reliable way to be wrong about this app: the number is
-             * exactly what `/logon` returned, and at GMU that payload is literally
-             * `"Balance":{"Amount":"0.00","Purses":[]}`.
-             *
-             * Shown only when the number is zero and the server refuses top-ups, which is the one
-             * combination that looks like a fault. A deployment that takes payments in-app has an
-             * Add Funds button instead and needs no explaining.
-             */
-            val zero = (state.user?.balance?.let { it.amount ?: it.total } ?: 0.0) == 0.0
-            val bank = state.capabilities?.bankName?.takeIf { it.isNotBlank() }
-            if (zero && bank != null && state.capabilities?.canAddFunds != true) {
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "This is your $bank balance, which is not your campus card. Tap to see where " +
-                        "printing money comes from.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = content,
-                )
-            }
-
-            if (purses.isNotEmpty() && variant != HeroVariant.Cached) {
-                Spacer(Modifier.height(10.dp))
-                Row(
-                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    purses.forEach { purse ->
-                        FactChip(
-                            icon = Icons.Filled.Savings,
-                            label = "${purse.name}  ${state.capabilities?.formats?.money(purse.amount) ?: purse.amount}",
-                            tone = MasonTone.Money,
+                                FundingVariant.Plain -> "My own balance"
+                                FundingVariant.Department -> ""
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = content,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.alignByBaseline().weight(1f, fill = false),
                         )
                     }
                 }
             }
-
-            /*
-             * Who pays, and one obvious control to change it — on every variant, not just when a
-             * department is already set. This was a line of text reading "tap to change", which is
-             * not a control, and then nothing at all, which left switching funding to an unmarked tap
-             * on a card that does not look tappable. It is the thing students change most often.
-             */
-            val department = state.costCenter?.takeIf { it.isNotBlank() }
-            val centre = department?.let { code ->
-                state.capabilities?.usableCostCenters?.firstOrNull { it.code.equals(code, true) }
-            }
-            Spacer(Modifier.height(12.dp))
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
+            if (variant == FundingVariant.Arrears) {
+                // The one variant that cannot be released gets the only explicit button: a chevron
+                // says "somewhere else", "Add funds" says the thing to do.
+                TextButton(
+                    onClick = onAddFunds,
+                    colors = ButtonDefaults.textButtonColors(contentColor = content),
+                ) { Text("Add funds", maxLines = 1) }
+            } else {
                 Icon(
-                    if (department != null) Icons.Filled.BusinessCenter else Icons.Filled.Work,
-                    null,
-                    Modifier.size(18.dp),
+                    Icons.AutoMirrored.Filled.ArrowForward,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = content,
                 )
-                Column(Modifier.weight(1f)) {
-                    Text("Charged to", style = MaterialTheme.typography.labelSmall, color = content)
-                    Text(
-                        centre?.description ?: department ?: "My own balance",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = content,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                FilledTonalButton(onClick = onChooseFunding) { Text("Change") }
-            }
-
-            if (variant == HeroVariant.Arrears) {
-                Spacer(Modifier.height(10.dp))
-                FilledTonalButton(onClick = onAddFunds) {
-                    ButtonGlyph(Icons.Filled.Savings)
-                    Text("How to add funds")
-                }
             }
         }
     }
@@ -1297,7 +1243,31 @@ private fun FundingPicker(
                         .joinToString(" · ") {
                             "${it.name} ${state.capabilities?.formats?.money(it.amount) ?: it.amount}"
                         }
-                        .ifBlank { state.balanceText ?: "Balance shown at the top of the screen" },
+                        .ifBlank {
+                            /*
+                             * Which purse this actually is, said where the choice is made.
+                             *
+                             * The print system keeps its own bank (`PrintCenter."Bank"`), separate
+                             * from the campus card. A student holding money on their card and reading
+                             * $0.00 here concludes the app is broken, which is the most reliable way
+                             * to be wrong about this app: the number is exactly what `/logon`
+                             * returned, and at GMU that payload is literally
+                             * `"Balance":{"Amount":"0.00","Purses":[]}`.
+                             *
+                             * Said only when the number is zero and the server refuses top-ups,
+                             * which is the one combination that looks like a fault. A deployment
+                             * that takes payments in-app has an Add Funds button instead and needs
+                             * no explaining. (This used to be a third paragraph on the queue hero;
+                             * the hero is one row now, and this is the screen it was pointing at.)
+                             */
+                            val zero = (state.user?.balance?.let { it.amount ?: it.total } ?: 0.0) == 0.0
+                            val bank = state.capabilities?.bankName?.takeIf { it.isNotBlank() }
+                            if (zero && bank != null && state.capabilities?.canAddFunds != true) {
+                                "Your $bank balance — not your campus card"
+                            } else {
+                                state.balanceText ?: "Balance shown at the top of the screen"
+                            }
+                        },
                     selected = draft.isBlank(),
                     onClick = { draft = "" },
                 )

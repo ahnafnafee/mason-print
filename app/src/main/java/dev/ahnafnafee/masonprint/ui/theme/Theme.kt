@@ -200,8 +200,28 @@ data class MasonColors(
     val onWarnContainer: Color,
     /** Full-saturation Mason Gold: accents and containers only, never behind white type. */
     val brandGold: Color,
+    /**
+     * The ink that pairs with [brandGold] — the same near-black brown as `onTertiaryContainer`,
+     * fixed rather than theme-flipped because the gold it sits on is fixed. 11.4 : 1, so a gold
+     * surface can carry real text (a white label on gold is 1.5 : 1, which is why the pair exists).
+     */
+    val brandGoldInk: Color,
     /** Pharos charcoal — the source of the neutral ramp, not painted directly. */
     val brandCharcoal: Color,
+    /**
+     * The queue's bottom bar: a light tint of Mason Gold, and the ink that reads on it.
+     *
+     * The bar is the quiet partner and the Release pill is the loud one, so the bar takes gold at
+     * ~30 % over white (`#FFCC33` × 0.3 on `#FFFFFF` ≈ `#FFF1C4`) rather than a palette container —
+     * the separation between `#FFF1C4` and the pill's full `#FFCC33` is what makes the pill pop.
+     * Dark keeps the palette's own gold-brown container tone, which reads as "dark yellow" without
+     * glowing in a dark room.
+     *
+     * Fixed brand pairs, like [brandGold] itself: stated once, and independent of scheme-role
+     * lookup at the call site.
+     */
+    val barContainer: Color,
+    val onBarContainer: Color,
 )
 
 val MasonColorsLight = MasonColors(
@@ -212,7 +232,10 @@ val MasonColorsLight = MasonColors(
     warnContainer = Color(0xFFFFE3A1),
     onWarnContainer = Color(0xFF271900),
     brandGold = MasonBrand.Gold,
+    brandGoldInk = Color(0xFF271900),
     brandCharcoal = MasonBrand.Charcoal,
+    barContainer = Color(0xFFFFF1C4),
+    onBarContainer = Color(0xFF271900),
 )
 
 val MasonColorsDark = MasonColors(
@@ -223,7 +246,10 @@ val MasonColorsDark = MasonColors(
     warnContainer = Color(0xFF5D4200),
     onWarnContainer = Color(0xFFFFE3A1),
     brandGold = MasonBrand.Gold,
+    brandGoldInk = Color(0xFF271900),
     brandCharcoal = MasonBrand.Charcoal,
+    barContainer = Color(0xFF5D4200),
+    onBarContainer = Color(0xFFFFE3A1),
 )
 
 val LocalMasonColors = staticCompositionLocalOf { MasonColorsLight }

@@ -9,6 +9,8 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Arrangement
@@ -49,7 +51,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -73,7 +75,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.ahnafnafee.masonprint.core.AppState
 import dev.ahnafnafee.masonprint.core.Session
+import dev.ahnafnafee.masonprint.ui.theme.MasonPillShape
 import dev.ahnafnafee.masonprint.ui.theme.SelectionBarCorner
+import dev.ahnafnafee.masonprint.ui.theme.currentMasonColors
 
 /**
  * One decision on the selection bar: what it is, what it is set to now, and a tap to change it.
@@ -182,9 +186,10 @@ internal class QueueSelection(
  *  - **Pull-to-refresh is the surface, not a button.** Refresh exists in three places — the gesture, the
  *    bar's icon, and the first overflow item — and all three call [Session.refresh], because in this API
  *    there is exactly one thing to refresh: the user (and with it the balance) and the queue, together.
- *  - **The button morphs instead of being replaced.** It collapses as the selection bar rises (§2.0.3:
- *    "the Extended FAB morphs its width when a queue selection is made") and stays in the same corner,
- *    so the gesture that adds a job is never in two places at once.
+ *  - **The bar carries one verb and one number; upload floats.** "Release at a printer" owns the bar
+ *    with the queue's total beside it, and Upload is an extended FAB above them that hides while the
+ *    selection bar is up, so the gesture that adds a job is always in the same corner and never
+ *    competes with a decision the selection bar is asking for.
  */
 @Composable
 internal fun QueueScaffold(
@@ -251,8 +256,40 @@ internal fun QueueScaffold(
                 scrollBehavior = scrollBehavior,
             )
         },
+        /*
+         * Upload as the extended FAB (§2.0.3), anchored in the same corner whether the bar below is
+         * showing the total or the selection actions — the gesture that adds a job is never in two
+         * places at once. It hides while the selection bar is up: that bar owns the screen then, and
+         * a FAB offering to add a job over a bar asking for a decision about the chosen ones is two
+         * conversations at once.
+         */
+        floatingActionButton = {
+            AnimatedVisibility(
+                visible = !selecting,
+                enter = fadeIn(if (reduced) snap() else MaterialTheme.motionScheme.defaultEffectsSpec()) +
+                    scaleIn(if (reduced) snap() else MaterialTheme.motionScheme.defaultSpatialSpec()),
+                exit = fadeOut(if (reduced) snap() else MaterialTheme.motionScheme.fastEffectsSpec()) +
+                    scaleOut(if (reduced) snap() else MaterialTheme.motionScheme.fastSpatialSpec()),
+            ) {
+                ExtendedFloatingActionButton(
+                    onClick = onPickDocument,
+                    icon = { Icon(Icons.Filled.UploadFile, null) },
+                    text = { Text("Upload") },
+                )
+            }
+        },
         bottomBar = {
             /*
+             * A light gold tint, with the full Mason Gold kept for the Release pill.
+             *
+             * The queue's one permanent brand statement: green carries meaning everywhere else
+             * (outcome, campus paying), charcoal carries selection, so gold is the one brand colour
+             * free to be *chrome* — and the edge you act from is where it goes. The bar is the tint
+             * and the button is the saturation, so the pill pops without the whole bar shouting.
+             * The cost-centre reading of gold survives — the strip carries its meaning in an icon
+             * and words, never in colour alone — and every colour here is a fixed [MasonColors]
+             * pair, because scheme roles flip in dark theme while the gold does not.
+             *
              * A surface with a shadow, not a bare Column on the background. The queue scrolls
              * underneath this bar, and with both painted the same colour the last card appeared to
              * dissolve into the buttons. The shadow is cast on all four edges but only the top one
@@ -264,36 +301,79 @@ internal fun QueueScaffold(
              * release affordance and the upload button sit under the gesture bar.
              */
             Surface(
-                color = MaterialTheme.colorScheme.surface,
+                color = currentMasonColors.barContainer,
+                contentColor = currentMasonColors.onBarContainer,
                 shadowElevation = 8.dp,
             ) {
                 Column(Modifier.fillMaxWidth().navigationBarsPadding()) {
                     /*
-                     * The two things a student does here, as two buttons of the same size and shape so
-                     * neither reads as "the real one": Upload is filled because it is where you start, and
-                     * Release is tonal because it is what you do later, at the machine. Both hide while a
-                     * selection is up — the selection bar below owns the actions then.
+                     * The verb that owns the bar, and the number that answers it.
+                     *
+                     * "Release at a printer" stays on the bar because it is where you are standing
+                     * when you need it. Upload moves out — to the FAB above this bar — because
+                     * adding a job is an anywhere-action, not a stand-at-the-printer one, and two
+                     * same-weight buttons made "which one starts a print?" a real question.
+                     *
+                     * In its place, the queue's own total: what releasing everything waiting would
+                     * cost, summed the same honest way the selection bar sums — unpriced jobs
+                     * contribute nothing and are named below the number, because `-1` is not a
+                     * price and a total that quietly swallowed it would be a lie the walk to the
+                     * printer discovers.
                      */
                     AnimatedVisibility(
                         visible = !selecting,
                         enter = fadeIn(if (reduced) snap() else MaterialTheme.motionScheme.defaultEffectsSpec()),
                         exit = fadeOut(if (reduced) snap() else MaterialTheme.motionScheme.fastEffectsSpec()),
                     ) {
+                        val waiting = state.pendingJobs(false)
+                        val priced = waiting.filterNot { it.costUnknown }
+                        val totalText =
+                            state.capabilities?.formats?.money(priced.sumOf { it.cost ?: 0.0 }) ?: "—"
+                        val unpriced = waiting.size - priced.size
                         Row(
                             Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 10.dp),
-                            // Sized to their labels, not split 50/50: an equal split truncated this one to
-                            // "Release at a pri…". Same component, height and shape is what makes them a
-                            // matched pair — equal width is not worth an ellipsis.
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            FilledTonalButton(onClick = { router.push(Route.Release) }) {
-                                ButtonGlyph(Icons.Filled.QrCodeScanner)
-                                Text("Release at a printer", maxLines = 1)
+                            /*
+                             * The pill is the one place full-saturation Mason Gold appears as a
+                             * control, over the bar's ~30 % tint of the same colour — the tone step
+                             * is the separation. A plain `Surface` with the fixed brand pair, not a
+                             * button component: the tonal default is cool grey, which reads muddy
+                             * on gold, and the pair is 11.4 : 1, honouring the palette's rule that
+                             * gold never sits behind white type.
+                             */
+                            Surface(
+                                onClick = { router.push(Route.Release) },
+                                shape = MasonPillShape,
+                                color = currentMasonColors.brandGold,
+                                contentColor = currentMasonColors.brandGoldInk,
+                            ) {
+                                Row(
+                                    Modifier.padding(horizontal = 20.dp, vertical = 13.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Icon(Icons.Filled.QrCodeScanner, null, Modifier.size(18.dp))
+                                    Text(
+                                        "Release at a printer",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        maxLines = 1,
+                                    )
+                                }
                             }
-                            Button(onClick = onPickDocument) {
-                                ButtonGlyph(Icons.Filled.UploadFile)
-                                Text("Upload")
+                            val ink = currentMasonColors.onBarContainer
+                            Column(horizontalAlignment = Alignment.End) {
+                                MoneyText(totalText, color = ink)
+                                Text(
+                                    if (unpriced > 0) "${waiting.size} waiting · $unpriced not priced yet"
+                                    else "${waiting.size} waiting",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ink,
+                                    textAlign = TextAlign.End,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
                             }
                         }
                     }
