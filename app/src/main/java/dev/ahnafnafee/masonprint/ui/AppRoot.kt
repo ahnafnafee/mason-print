@@ -115,7 +115,12 @@ fun AppRoot(
         }
     }
 
-    Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { _ ->
+    /*
+     * The queue hosts the snackbar in its own Scaffold, where Material anchors it above the bottom
+     * bar; everywhere else this Scaffold hosts it. Exactly one host is composed at a time, so a
+     * notice never shows twice, and never again lands on top of the Release pill.
+     */
+    Scaffold(snackbarHost = { if (router.current != Route.Queue) SnackbarHost(snackbar) }) { _ ->
         when (val route = router.current) {
             Route.Campus -> ConnectScreen(
                 state = state,
@@ -171,6 +176,7 @@ fun AppRoot(
                 state = state,
                 session = session,
                 router = router,
+                snackbar = snackbar,
                 onPickDocument = onPickDocument,
             )
 

@@ -64,6 +64,44 @@ class AppPrefs(context: Context) {
     }
 
     /**
+     * Cost-centre codes this account has charged to, most recent first, for reuse.
+     *
+     * The server publishes no directory of codes — a search answers with the ones already on the
+     * account — so the only list that can remember what a department handed a student is on the
+     * phone. Per account for the same reason the funding source is, and it outlives sign-out for
+     * the same reason too: the code is as useful next semester as today.
+     */
+    fun savedCostCentersFor(account: String): List<SavedCostCenter> =
+        prefs.getString(KEY_SAVED_COST_CENTERS + account, null)
+            ?.split('\n')
+            ?.mapNotNull { raw ->
+                val sep = raw.indexOf('|')
+                if (sep <= 0) return@mapNotNull null
+                SavedCostCenter(
+                    code = raw.substring(0, sep),
+                    description = raw.substring(sep + 1).takeIf { it.isNotEmpty() },
+                )
+            }
+            .orEmpty()
+
+    fun setSavedCostCentersFor(account: String, list: List<SavedCostCenter>) {
+        val encoded = list.take(SAVED_COST_CENTERS).joinToString("\n") { entry ->
+            // `|` and newline are this format's own separators, and a description is display-only,
+            // so stripping them there costs nothing and keeps the decode above honest.
+            entry.code + "|" + (entry.description?.replace('\n', ' ')?.replace('|', '·') ?: "")
+        }
+        prefs.edit().putString(KEY_SAVED_COST_CENTERS + account, encoded).apply()
+    }
+
+    /** Moves [code] to the front, de-duplicating case-insensitively, and drops anything past the cap. */
+    fun noteCostCenterUsed(account: String, code: String, description: String?) {
+        if (code.isBlank()) return
+        val next = listOf(SavedCostCenter(code, description)) +
+            savedCostCentersFor(account).filterNot { it.code.equals(code, ignoreCase = true) }
+        setSavedCostCentersFor(account, next)
+    }
+
+    /**
      * Printers this account has starred, by device `Location`.
      *
      * Per account and not per device, for the same reason the funding source is: on a shared phone
@@ -180,8 +218,21 @@ class AppPrefs(context: Context) {
          * to need its own scroll has stopped being one.
          */
         const val RECENT_DEVICES = 5
+
+        /** Prefix, not a key: the account id is appended (see [savedCostCentersFor]). */
+        const val KEY_SAVED_COST_CENTERS = "saved_cost_centers::"
+
+        /**
+         * How many saved codes to keep. The list exists so the same handful of codes a department
+         * issues is one tap away; longer than this and it stops being shortcuts and starts being a
+         * second directory.
+         */
+        const val SAVED_COST_CENTERS = 8
     }
 }
+
+/** A cost-centre code saved on this phone for reuse, with the description the server gave, if any. */
+data class SavedCostCenter(val code: String, val description: String?)
 
 /**
  * [TlsTrustStore] over [AppPrefs].

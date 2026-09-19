@@ -30,6 +30,7 @@ import dev.ahnafnafee.masonprint.data.net.PharosTarget
 import dev.ahnafnafee.masonprint.data.net.TrustedCertificate
 import dev.ahnafnafee.masonprint.data.net.UploadSource
 import dev.ahnafnafee.masonprint.data.net.getOrNull
+import dev.ahnafnafee.masonprint.data.prefs.SavedCostCenter
 import dev.ahnafnafee.masonprint.data.upload.MimeTypes
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -77,6 +78,12 @@ data class AppState(
      */
     val costCenterResults: List<CostCenter> = emptyList(),
     val searchingCostCenters: Boolean = false,
+    /**
+     * Cost-centre codes this account has charged to before, most recent first. The server publishes
+     * no directory of codes, so this phone-held list is the only place the code a department handed
+     * out survives between sessions — a manually typed code becomes reusable the moment it is used.
+     */
+    val savedCostCenters: List<SavedCostCenter> = emptyList(),
     val busy: String? = null,
     val upload: UploadProgress? = null,
     val uploadFraction: Float = 0f,
@@ -256,6 +263,8 @@ class Session(private val graph: AppGraph) {
             // balance" at someone who always charges a department. Re-applied for real at sign-in,
             // when the server has said who this actually is.
             costCenter = graph.prefs.lastAccount?.let { graph.prefs.costCenterFor(it) },
+            // Codes this account has charged to before, so the funding picker offers them at once.
+            savedCostCenters = graph.prefs.lastAccount?.let { graph.prefs.savedCostCentersFor(it) } ?: emptyList(),
             // Printers are stable; show the cached list at once and let a live load supersede it.
             devices = cachedDevices(),
         ),
@@ -476,6 +485,7 @@ class Session(private val graph: AppGraph) {
                             costCenter = remembered,
                             favouriteDevices = graph.prefs.favouriteDevicesFor(account),
                             recentDevices = graph.prefs.recentDevicesFor(account),
+                            savedCostCenters = graph.prefs.savedCostCentersFor(account),
                             apiVersion = graph.api.apiVersion ?: it.apiVersion,
                             capabilities = doc?.capabilities(graph.api.apiVersion, result.value),
                             busy = null,
@@ -873,7 +883,39 @@ class Session(private val graph: AppGraph) {
         _state.update { it.copy(costCenter = trimmed) }
         // Remembered against the signed-in account, so it comes back on the next sign-in.
         val account = _state.value.user?.accountKey ?: graph.prefs.lastAccount
-        if (account != null) scope.launch { graph.prefs.setCostCenterFor(account, trimmed) }
+        if (account != null) scope.launch {
+            graph.prefs.setCostCenterFor(account, trimmed)
+            /*
+             * Charging to a code is also a vote to use it again. The code is saved with whatever
+             * description any loaded list knows, so the next "Pay with" offers it as a tap instead
+             * of a typing exercise — the server's directory cannot do this, because it does not
+             * exist (a search answers with the codes already on the account).
+             */
+            if (trimmed != null) {
+                graph.prefs.noteCostCenterUsed(account, trimmed, knownCostCenter(trimmed)?.description)
+                _state.update { it.copy(savedCostCenters = graph.prefs.savedCostCentersFor(account)) }
+            }
+        }
+    }
+
+    /**
+     * Removes a code from the saved list. The active funding source is untouched: forgetting a
+     * shortcut is not switching funding, and the code stays chargeable by typing it.
+     */
+    fun unsaveCostCenter(code: String) {
+        val account = _state.value.user?.accountKey ?: graph.prefs.lastAccount ?: return
+        val next = _state.value.savedCostCenters.filterNot { it.code.equals(code, ignoreCase = true) }
+        if (next.size == _state.value.savedCostCenters.size) return
+        _state.update { it.copy(savedCostCenters = next) }
+        scope.launch { graph.prefs.setSavedCostCentersFor(account, next) }
+    }
+
+    /** The server's own record of a code, from any list this session has loaded, or null. */
+    private fun knownCostCenter(code: String): CostCenter? {
+        val snapshot = _state.value
+        return snapshot.capabilities?.usableCostCenters?.firstOrNull { it.code.equals(code, true) }
+            ?: snapshot.costCenterResults.firstOrNull { it.code.equals(code, true) }
+            ?: snapshot.user?.costCenters?.firstOrNull { it.code.equals(code, true) }
     }
 
     /**

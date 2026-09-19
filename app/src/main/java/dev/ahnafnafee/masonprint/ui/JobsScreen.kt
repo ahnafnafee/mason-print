@@ -19,8 +19,8 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -34,7 +34,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -47,6 +49,7 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.BusinessCenter
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Language
@@ -74,6 +77,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -142,6 +146,7 @@ fun JobsScreen(
     state: AppState,
     session: Session,
     router: Router,
+    snackbar: SnackbarHostState,
     onPickDocument: () -> Unit,
 ) {
     var showReleased by rememberSaveable { mutableStateOf(false) }
@@ -178,6 +183,7 @@ fun JobsScreen(
         session = session,
         router = router,
         onPickDocument = onPickDocument,
+        snackbar = snackbar,
         selection = QueueSelection(
             onClear = { session.clearSelection() },
             /*
@@ -344,6 +350,7 @@ fun JobsScreen(
             state = state,
             onDismiss = { fundingOpen = false },
             onSearch = session::searchCostCenters,
+            onRemove = { session.unsaveCostCenter(it) },
             onPick = { code ->
                 session.setCostCenter(code)
                 fundingOpen = false
@@ -1226,6 +1233,7 @@ private fun FundingPicker(
     state: AppState,
     onDismiss: () -> Unit,
     onSearch: (String) -> Unit,
+    onRemove: (String) -> Unit,
     onPick: (String?) -> Unit,
 ) {
     var draft by remember { mutableStateOf(state.costCenter.orEmpty()) }
@@ -1236,7 +1244,12 @@ private fun FundingPicker(
         icon = { Icon(Icons.Filled.Work, null) },
         title = { Text("Who pays for this?") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Scrollable: saved codes, the account's own list and search results together can be
+            // taller than a dialog, and a cut-off confirm button is no confirm button.
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 SelectableFundingRow(
                     label = "My own balance",
                     supporting = state.purseBreakdown
@@ -1271,6 +1284,37 @@ private fun FundingPicker(
                     selected = draft.isBlank(),
                     onClick = { draft = "" },
                 )
+                /*
+                 * Codes this phone remembers the account charging to. The server publishes no
+                 * directory of codes, so this is the only place the code a department handed out
+                 * lives between uses — including one typed by hand, which is saved the moment it is
+                 * charged to. Shown before the account's own list because these are the ones this
+                 * student actually uses; hidden for any code the server already lists, so no code
+                 * appears twice.
+                 */
+                val listed = centres.map { it.code.lowercase() }.toSet()
+                val saved = state.savedCostCenters.filter { it.code.lowercase() !in listed }
+                if (saved.isNotEmpty()) {
+                    SectionLabel("Saved for reuse")
+                    saved.forEach { entry ->
+                        SelectableFundingRow(
+                            label = entry.code,
+                            supporting = entry.description ?: "Saved on this phone",
+                            selected = draft.equals(entry.code, ignoreCase = true),
+                            onClick = { draft = entry.code },
+                            trailing = {
+                                // Removing a shortcut is not switching funding — the row is the
+                                // choice, the ✕ only edits the list of shortcuts.
+                                IconButton(onClick = { onRemove(entry.code) }) {
+                                    Icon(
+                                        Icons.Filled.Close,
+                                        contentDescription = "Remove ${entry.code} from saved",
+                                    )
+                                }
+                            },
+                        )
+                    }
+                }
                 centres.forEach { centre ->
                     SelectableFundingRow(
                         label = centre.code,
@@ -1321,8 +1365,9 @@ private fun FundingPicker(
                     },
                 )
                 Text(
-                    "Type a code your department gave you, or search. The server decides whether a " +
-                        "code is valid when the job is released, so a code that is not listed here can " +
+                    "Type a code your department gave you, or search. Every code you charge to is " +
+                        "saved on this phone for next time. The server decides whether a code is " +
+                        "valid when the job is released, so a code that is not listed here can " +
                         "still work.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1364,6 +1409,7 @@ private fun SelectableFundingRow(
     supporting: String,
     selected: Boolean,
     onClick: () -> Unit,
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     Surface(
         onClick = onClick,
@@ -1374,7 +1420,7 @@ private fun SelectableFundingRow(
         border = if (selected) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Row(
-            Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            Modifier.padding(start = 12.dp, top = 10.dp, end = 4.dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -1395,6 +1441,7 @@ private fun SelectableFundingRow(
                     )
                 }
             }
+            trailing?.invoke()
         }
     }
 }

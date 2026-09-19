@@ -57,6 +57,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -198,6 +200,7 @@ internal fun QueueScaffold(
     router: Router,
     onPickDocument: () -> Unit,
     selection: QueueSelection,
+    snackbar: SnackbarHostState,
     content: @Composable (contentPadding: PaddingValues) -> Unit,
 ) {
     val reduced = rememberReducedMotion()
@@ -211,6 +214,12 @@ internal fun QueueScaffold(
     val refreshing = state.busy != null
 
     Scaffold(
+        /*
+         * The queue hosts the app's snackbar itself, so Material anchors notices *above* the
+         * bottom bar instead of over it — the app-level host sits at the screen's bottom edge,
+         * where a notice hid the Release pill and the total until it timed out.
+         */
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = {
@@ -262,6 +271,9 @@ internal fun QueueScaffold(
          * places at once. It hides while the selection bar is up: that bar owns the screen then, and
          * a FAB offering to add a job over a bar asking for a decision about the chosen ones is two
          * conversations at once.
+         *
+         * The action green, matching the Release pill — the bar's neutral chrome carries exactly
+         * one accent, and it is this one.
          */
         floatingActionButton = {
             AnimatedVisibility(
@@ -273,6 +285,8 @@ internal fun QueueScaffold(
             ) {
                 ExtendedFloatingActionButton(
                     onClick = onPickDocument,
+                    containerColor = currentMasonColors.barAction,
+                    contentColor = currentMasonColors.onBarAction,
                     icon = { Icon(Icons.Filled.UploadFile, null) },
                     text = { Text("Upload") },
                 )
@@ -280,15 +294,14 @@ internal fun QueueScaffold(
         },
         bottomBar = {
             /*
-             * A light gold tint, with the full Mason Gold kept for the Release pill.
+             * The chosen surface: `secondaryContainer`, the same grey-blue the picker highlights a
+             * chosen row in and the selection bar below is made of.
              *
-             * The queue's one permanent brand statement: green carries meaning everywhere else
-             * (outcome, campus paying), charcoal carries selection, so gold is the one brand colour
-             * free to be *chrome* — and the edge you act from is where it goes. The bar is the tint
-             * and the button is the saturation, so the pill pops without the whole bar shouting.
-             * The cost-centre reading of gold survives — the strip carries its meaning in an icon
-             * and words, never in colour alone — and every colour here is a fixed [MasonColors]
-             * pair, because scheme roles flip in dark theme while the gold does not.
+             * That makes the bar one stable surface whose contents change — totals in the idle
+             * state, the selection actions once jobs are chosen — instead of a bar that repaints
+             * when you select. It is a scheme role, so dark theme flips it with everything else,
+             * and it stays in the app's charcoal *selection* family: no hue, so the gold strip and
+             * the green of the Release pill and FAB stay the only colours on screen.
              *
              * A surface with a shadow, not a bare Column on the background. The queue scrolls
              * underneath this bar, and with both painted the same colour the last card appeared to
@@ -301,8 +314,8 @@ internal fun QueueScaffold(
              * release affordance and the upload button sit under the gesture bar.
              */
             Surface(
-                color = currentMasonColors.barContainer,
-                contentColor = currentMasonColors.onBarContainer,
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
                 shadowElevation = 8.dp,
             ) {
                 Column(Modifier.fillMaxWidth().navigationBarsPadding()) {
@@ -319,12 +332,14 @@ internal fun QueueScaffold(
                      * contribute nothing and are named below the number, because `-1` is not a
                      * price and a total that quietly swallowed it would be a lie the walk to the
                      * printer discovers.
+                     *
+                     * Swapped with the selection bar in one frame, no transition machinery: a
+                     * bottom bar whose height changes over spring frames re-pads the full-screen
+                     * list behind it on every one of those frames, which reads as the bar
+                     * *lagging*; one frame reads as arriving. (§2.0.5 said this for reduced
+                     * motion — a screen full of job cards needs it always.)
                      */
-                    AnimatedVisibility(
-                        visible = !selecting,
-                        enter = fadeIn(if (reduced) snap() else MaterialTheme.motionScheme.defaultEffectsSpec()),
-                        exit = fadeOut(if (reduced) snap() else MaterialTheme.motionScheme.fastEffectsSpec()),
-                    ) {
+                    if (!selecting) {
                         val waiting = state.pendingJobs(false)
                         val priced = waiting.filterNot { it.costUnknown }
                         val totalText =
@@ -336,18 +351,17 @@ internal fun QueueScaffold(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             /*
-                             * The pill is the one place full-saturation Mason Gold appears as a
-                             * control, over the bar's ~30 % tint of the same colour — the tone step
-                             * is the separation. A plain `Surface` with the fixed brand pair, not a
-                             * button component: the tonal default is cool grey, which reads muddy
-                             * on gold, and the pair is 11.4 : 1, honouring the palette's rule that
-                             * gold never sits behind white type.
+                             * The pill takes the full brand green over the bar's tint of the same
+                             * colour — the tone step is the separation. A plain `Surface` with the
+                             * fixed action pair, not a button component: white on Mason Green is
+                             * 7.1 : 1, the palette's own filled-button pairing, and the tonal
+                             * default would be cool grey on green, which reads muddy.
                              */
                             Surface(
                                 onClick = { router.push(Route.Release) },
                                 shape = MasonPillShape,
-                                color = currentMasonColors.brandGold,
-                                contentColor = currentMasonColors.brandGoldInk,
+                                color = currentMasonColors.barAction,
+                                contentColor = currentMasonColors.onBarAction,
                             ) {
                                 Row(
                                     Modifier.padding(horizontal = 20.dp, vertical = 13.dp),
@@ -362,14 +376,13 @@ internal fun QueueScaffold(
                                     )
                                 }
                             }
-                            val ink = currentMasonColors.onBarContainer
                             Column(horizontalAlignment = Alignment.End) {
-                                MoneyText(totalText, color = ink)
+                                MoneyText(totalText)
                                 Text(
                                     if (unpriced > 0) "${waiting.size} waiting · $unpriced not priced yet"
                                     else "${waiting.size} waiting",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = ink,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
                                     textAlign = TextAlign.End,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
@@ -377,12 +390,12 @@ internal fun QueueScaffold(
                             }
                         }
                     }
-                    QueueSelectionBar(
-                        state = state,
-                        selecting = selecting,
-                        reduced = reduced,
-                        selection = selection,
-                    )
+                    if (selecting) {
+                        QueueSelectionBar(
+                            state = state,
+                            selection = selection,
+                        )
+                    }
                 }
             }
         },
@@ -468,24 +481,16 @@ private fun QueueOverflow(
 @Composable
 private fun QueueSelectionBar(
     state: AppState,
-    selecting: Boolean,
-    reduced: Boolean,
     selection: QueueSelection,
 ) {
-    AnimatedVisibility(
-        visible = selecting,
-        enter = slideInVertically(
-            animationSpec = if (reduced) snap() else MaterialTheme.motionScheme.slowSpatialSpec(),
-            initialOffsetY = { it },
-        ) + fadeIn(if (reduced) snap() else MaterialTheme.motionScheme.defaultEffectsSpec()),
-        // Snapped under reduced motion (§2.0.5): an object that arrived is information, the travel is
-        // not, and someone who just cleared a selection wants the list back immediately.
-        exit = slideOutVertically(
-            animationSpec = if (reduced) snap() else MaterialTheme.motionScheme.fastSpatialSpec(),
-            targetOffsetY = { it },
-        ) + fadeOut(if (reduced) snap() else MaterialTheme.motionScheme.fastEffectsSpec()),
-    ) {
-        val chosen = state.chosen
+    /*
+     * Composed only while a selection exists (the caller's `if`), with no transition of its own:
+     * every animated frame of a changing bottomBar height re-pads the full-screen list behind it,
+     * and on a screen of job cards that is the bar *lagging*, not moving. §2.0.5's own argument,
+     * promoted from the reduced-motion branch to the rule: an object that arrived is information,
+     * the travel is not.
+     */
+    val chosen = state.chosen
         val count = chosen.size
         val formats = state.capabilities?.formats
         // An unpriced job contributes nothing to the total, because there is no number to contribute:
@@ -626,5 +631,4 @@ private fun QueueSelectionBar(
                 }
             }
         }
-    }
 }

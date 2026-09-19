@@ -216,6 +216,58 @@ fun CostCentersScreen(
                 }
             }
 
+            /*
+             * Codes this phone remembers the account charging to — the only directory that exists,
+             * because the server answers every search with the codes already on the account. A
+             * hand-typed code lands here the moment it is charged to, which is the whole trick:
+             * type it once, tap it forever. Hidden for any code the server already lists.
+             */
+            val mergedCodes = remember(merged) { merged.map { it.code.lowercase() }.toSet() }
+            val savedHere = remember(state.savedCostCenters, mergedCodes) {
+                state.savedCostCenters.filter { it.code.lowercase() !in mergedCodes }
+            }
+            if (savedHere.isNotEmpty()) {
+                SectionGap()
+                SectionLabel("Saved on this phone")
+                savedHere.forEach { entry ->
+                    val chosen = state.costCenter?.equals(entry.code, ignoreCase = true) == true
+                    ChargeCard(
+                        selected = chosen,
+                        selectedContainer = MaterialTheme.colorScheme.tertiaryContainer,
+                        onClick = { session.setCostCenter(entry.code) },
+                        mark = {
+                            Icon(
+                                if (chosen) Icons.Filled.CheckCircle else Icons.Filled.BusinessCenter,
+                                contentDescription = if (chosen) "Selected" else null,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        },
+                    ) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                entry.code,
+                                style = LocalMasonType.current.monoLabel,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text(
+                                entry.description ?: "Saved on this phone",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        // Removing a shortcut is not switching funding — the card is the choice,
+                        // the ✕ only edits the list of shortcuts.
+                        IconButton(onClick = { session.unsaveCostCenter(entry.code) }) {
+                            Icon(
+                                Icons.Filled.Close,
+                                contentDescription = "Remove ${entry.code} from saved",
+                            )
+                        }
+                    }
+                }
+            }
+
             SectionGap()
             SearchField(
                 query = query,
@@ -251,8 +303,8 @@ fun CostCentersScreen(
                 Text(
                     "This server does not publish a directory of codes: it answers every search with " +
                         "the codes already on your account, listed above. If your department gave you " +
-                        "one that is not there, type it in full and charge to it anyway. The server " +
-                        "decides when the job is priced.",
+                        "one that is not there, type it in full and charge to it anyway — it is then " +
+                        "saved on this phone for next time. The server decides when the job is priced.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
