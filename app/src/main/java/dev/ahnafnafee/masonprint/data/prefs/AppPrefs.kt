@@ -64,6 +64,46 @@ class AppPrefs(context: Context) {
     }
 
     /**
+     * Printers this account has starred, by device `Location`.
+     *
+     * Per account and not per device, for the same reason the funding source is: on a shared phone
+     * one student's regular printer is noise to the next. `Location` is the key because it is the
+     * only identifier this API keeps stable; a label can be renamed by an administrator without
+     * the station moving.
+     */
+    fun favouriteDevicesFor(account: String): Set<String> =
+        prefs.getStringSet(KEY_FAVOURITE_DEVICES + account, emptySet()).orEmpty()
+
+    fun setFavouriteDevicesFor(account: String, locations: Set<String>) {
+        prefs.edit().putStringSet(KEY_FAVOURITE_DEVICES + account, locations).apply()
+    }
+
+    /**
+     * The printers this account last released at, most recent first, capped at [RECENT_DEVICES].
+     *
+     * Kept here rather than derived from the queue. The queue-derived version could only see
+     * printers named by released jobs still in the loaded page, so the list a student relies on
+     * emptied itself as their jobs aged out, which is exactly when they have been using the same
+     * machine long enough for it to be worth remembering.
+     *
+     * A `StringSet` cannot hold an order, so this is one delimited string. `Location` values are
+     * server paths like `/devices/70` and never contain a newline.
+     */
+    fun recentDevicesFor(account: String): List<String> =
+        prefs.getString(KEY_RECENT_DEVICES + account, null)
+            ?.split('\n')
+            ?.filter { it.isNotBlank() }
+            .orEmpty()
+
+    /** Moves [location] to the front, de-duplicating, and drops anything past the cap. */
+    fun noteDeviceUsed(account: String, location: String) {
+        if (location.isBlank()) return
+        val next = (listOf(location) + recentDevicesFor(account).filterNot { it == location })
+            .take(RECENT_DEVICES)
+        prefs.edit().putString(KEY_RECENT_DEVICES + account, next.joinToString("\n")).apply()
+    }
+
+    /**
      * Light, dark, or follow the phone. Stored for the device rather than the account: switching
      * accounts must not restyle the app, and it has to survive sign-out.
      */
@@ -129,6 +169,17 @@ class AppPrefs(context: Context) {
         const val KEY_DIAGNOSTICS = "diagnostics"
         const val KEY_TRUSTS = "trusted_certs"
         const val KEY_DEVICES = "cached_devices"
+
+        /** Prefixes, not keys: the account id is appended. */
+        const val KEY_FAVOURITE_DEVICES = "fav_devices::"
+        const val KEY_RECENT_DEVICES = "recent_devices::"
+
+        /**
+         * How many recent printers to keep. Short on purpose: the list exists to save a student
+         * scrolling 302 rows for the machine they used yesterday, and a "recent" list long enough
+         * to need its own scroll has stopped being one.
+         */
+        const val RECENT_DEVICES = 5
     }
 }
 

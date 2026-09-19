@@ -54,6 +54,8 @@ import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.ReceiptLong
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
@@ -274,21 +276,40 @@ fun ReleaseScreen(
                         )
             }
         }
-        // "Last used" from the wire, not a client favourite: a device matches when a released job's
-        // `PrinterName` — a server read — names it. No field invents history the server did not report.
-        val lastUsedNames = remember(state.jobs) {
+        /*
+         * Starred first, then recently used, then everything by building.
+         *
+         * Two sources, deliberately kept apart. A **favourite** is a preference the student stated,
+         * so it is local and it never expires. **Recent** is history, and it comes from two places
+         * that answer different questions: the account's own release log, which survives the queue
+         * turning over, and the server's `PrinterName` on released jobs still loaded, which covers
+         * releases made from the web portal or another device. The log leads because it is ordered
+         * by when, where the wire read is only a set.
+         *
+         * A device appears in exactly one section: starring a printer promotes it out of Recent
+         * rather than listing it twice.
+         */
+        val favourites = remember(shownDevices, state.favouriteDevices) {
+            shownDevices.filter { it.location in state.favouriteDevices }.sortedBy { it.label }
+        }
+        val wireUsedNames = remember(state.jobs) {
             state.jobs.filter { !it.pending }.mapNotNull { it.printerName }.toSet()
         }
-        val lastUsed = remember(shownDevices, lastUsedNames) {
-            shownDevices.filter { d ->
-                lastUsedNames.any { n ->
+        val recent = remember(shownDevices, state.recentDevices, wireUsedNames, favourites) {
+            val byLocation = shownDevices.associateBy { it.location }
+            val fromLog = state.recentDevices.mapNotNull(byLocation::get)
+            val fromWire = shownDevices.filter { d ->
+                wireUsedNames.any { n ->
                     n.equals(d.label, ignoreCase = true) ||
                         n.equals(d.name, ignoreCase = true) ||
                         n.equals(d.location, ignoreCase = true)
                 }
             }
+            (fromLog + fromWire).distinct().filterNot { it in favourites }
         }
-        val restDevices = remember(shownDevices, lastUsed) { shownDevices.filter { it !in lastUsed } }
+        val restDevices = remember(shownDevices, favourites, recent) {
+            shownDevices.filterNot { it in favourites || it in recent }
+        }
 
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(bar),
@@ -335,9 +356,12 @@ fun ReleaseScreen(
                     onOpenFilter = { router.push(Route.PrinterFilter) },
                     onClearFilter = { ReleaseHandoff.clearFilter() },
                     stations = stations,
-                    lastUsed = lastUsed,
+                    favourites = favourites,
+                    recent = recent,
                     rest = restDevices,
+                    favouriteLocations = state.favouriteDevices,
                     onPick = pick,
+                    onToggleFavourite = session::toggleFavouriteDevice,
                     onReload = session::loadDevices,
                 )
 
@@ -430,9 +454,12 @@ private fun LazyListScope.printersTab(
     onOpenFilter: () -> Unit,
     onClearFilter: () -> Unit,
     stations: Map<Device, Station>,
-    lastUsed: List<Device>,
+    favourites: List<Device>,
+    recent: List<Device>,
     rest: List<Device>,
+    favouriteLocations: Set<String>,
     onPick: (Device) -> Unit,
+    onToggleFavourite: (Device) -> Unit,
     onReload: () -> Unit,
 ) {
     item(key = "search") {
@@ -496,7 +523,7 @@ private fun LazyListScope.printersTab(
         }
     }
 
-    if (lastUsed.isEmpty() && rest.isEmpty()) {
+    if (favourites.isEmpty() && recent.isEmpty() && rest.isEmpty()) {
         item(key = "no-match") {
             EmptyState(
                 icon = Icons.Filled.Search,
@@ -507,9 +534,29 @@ private fun LazyListScope.printersTab(
         return
     }
 
-    if (lastUsed.isNotEmpty()) {
-        item(key = "last-used") { SectionLabel("Last used") }
-        items(lastUsed) { d -> DeviceRow(device = d, last = true, onClick = { onPick(d) }) }
+    if (favourites.isNotEmpty()) {
+        item(key = "favourites") { SectionLabel("Starred") }
+        items(favourites, key = { "fav-" + it.location }) { d ->
+            DeviceRow(
+                device = d,
+                last = false,
+                favourite = true,
+                onClick = { onPick(d) },
+                onToggleFavourite = { onToggleFavourite(d) },
+            )
+        }
+    }
+    if (recent.isNotEmpty()) {
+        item(key = "last-used") { SectionLabel("Recently used") }
+        items(recent, key = { "recent-" + it.location }) { d ->
+            DeviceRow(
+                device = d,
+                last = true,
+                favourite = d.location in favouriteLocations,
+                onClick = { onPick(d) },
+                onToggleFavourite = { onToggleFavourite(d) },
+            )
+        }
     }
     if (rest.isNotEmpty()) {
         item(key = "all-printers") {
@@ -544,8 +591,14 @@ private fun LazyListScope.printersTab(
                                 )
                             }
                         }
-                        items(inFloor.sortedBy { it.label }) { d ->
-                            DeviceRow(device = d, last = false, onClick = { onPick(d) })
+                        items(inFloor.sortedBy { it.label }, key = { it.location }) { d ->
+                            DeviceRow(
+                                device = d,
+                                last = false,
+                                favourite = d.location in favouriteLocations,
+                                onClick = { onPick(d) },
+                                onToggleFavourite = { onToggleFavourite(d) },
+                            )
                         }
                     }
             }
@@ -554,14 +607,20 @@ private fun LazyListScope.printersTab(
 
 /** A printer row: 44 dp print avatar, name, mono model line, capability facts, and where it leads. */
 @Composable
-private fun DeviceRow(device: Device, last: Boolean, onClick: () -> Unit) {
+private fun DeviceRow(
+    device: Device,
+    last: Boolean,
+    favourite: Boolean,
+    onClick: () -> Unit,
+    onToggleFavourite: () -> Unit,
+) {
     Surface(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         shape = MaterialTheme.shapes.large,
         color = MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
         Row(
-            Modifier.padding(14.dp),
+            Modifier.padding(start = 14.dp, end = 4.dp, top = 14.dp, bottom = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -579,14 +638,29 @@ private fun DeviceRow(device: Device, last: Boolean, onClick: () -> Unit) {
                     if (device.colorSupported) FactChip(Icons.Filled.Palette, "Colour")
                     else FactChip(Icons.Filled.MonochromePhotos, "B&W only")
                     if (device.duplexSupported) FactChip(Icons.Filled.Description, "Two-sided")
-                    if (last) FactChip(Icons.Filled.History, "Last used")
+                    if (last) FactChip(Icons.Filled.History, "Used before")
                 }
             }
-            Icon(
-                Icons.AutoMirrored.Filled.ArrowForward,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            /*
+             * Its own button, not a swipe or a long-press: starring has to be discoverable from
+             * looking, and the row's tap already means "release here", which is the one gesture
+             * that must never be ambiguous when a student is standing at a machine.
+             */
+            IconButton(onClick = onToggleFavourite) {
+                Icon(
+                    if (favourite) Icons.Filled.Star else Icons.Filled.StarBorder,
+                    contentDescription = if (favourite) {
+                        "Remove ${device.label} from starred"
+                    } else {
+                        "Star ${device.label}"
+                    },
+                    tint = if (favourite) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
         }
     }
 }

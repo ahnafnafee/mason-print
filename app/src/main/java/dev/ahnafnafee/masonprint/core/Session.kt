@@ -57,6 +57,10 @@ data class AppState(
     val loadedAt: Long = 0L,
     val devices: List<Device> = emptyList(),
     val selectedDevice: Device? = null,
+    /** Device `Location`s this account has starred, newest-irrelevant: the picker sorts by label. */
+    val favouriteDevices: Set<String> = emptySet(),
+    /** Device `Location`s this account last released at, most recent first. */
+    val recentDevices: List<String> = emptyList(),
     /**
      * What the next release should charge: null = the user's own balance (all of their purses, in
      * the server's spending order), non-null = that cost-centre code instead. A department that
@@ -470,6 +474,8 @@ class Session(private val graph: AppGraph) {
                             phase = Phase.Ready,
                             user = result.value,
                             costCenter = remembered,
+                            favouriteDevices = graph.prefs.favouriteDevicesFor(account),
+                            recentDevices = graph.prefs.recentDevicesFor(account),
                             apiVersion = graph.api.apiVersion ?: it.apiVersion,
                             capabilities = doc?.capabilities(graph.api.apiVersion, result.value),
                             busy = null,
@@ -935,6 +941,23 @@ class Session(private val graph: AppGraph) {
         }
     }
 
+    /**
+     * Star or unstar a printer for the signed-in account.
+     *
+     * Local, and deliberately so: Pharos has no notion of a favourite, and inventing a server field
+     * for one would be a write this app cannot verify. A star is a preference about a person, not a
+     * fact about a device.
+     */
+    fun toggleFavouriteDevice(device: Device) {
+        val account = _state.value.user?.accountKey ?: graph.prefs.lastAccount ?: return
+        val location = device.location.takeIf { it.isNotBlank() } ?: return
+        val next = _state.value.favouriteDevices.let {
+            if (location in it) it - location else it + location
+        }
+        graph.prefs.setFavouriteDevicesFor(account, next)
+        _state.update { it.copy(favouriteDevices = next) }
+    }
+
     fun releaseSelected(jobs: List<PrintJob>) {
         val target = graph.target ?: return
         val device = _state.value.selectedDevice
@@ -984,11 +1007,21 @@ class Session(private val graph: AppGraph) {
                     val after = op.updatedUser?.let { u ->
                         _state.value.capabilities?.formats?.money(u.balance?.amount ?: u.balance?.total)
                     } ?: before
+                    /*
+                     * Remember the machine, but only when something actually came out of it. A
+                     * refused release is not a visit, and recording one would put a printer the
+                     * student never successfully used at the top of their list.
+                     */
+                    val account = _state.value.user?.accountKey ?: graph.prefs.lastAccount
+                    if (moved.isNotEmpty() && account != null && device != null) {
+                        graph.prefs.noteDeviceUsed(account, device.location)
+                    }
                     _state.update {
                         it.copy(
                             busy = null,
                             user = op.updatedUser ?: it.user,
                             selection = emptySet(),
+                            recentDevices = account?.let { a -> graph.prefs.recentDevicesFor(a) } ?: it.recentDevices,
                             outcome = ReleaseOutcome(
                                 printer = printer,
                                 fundingIntent = intent,

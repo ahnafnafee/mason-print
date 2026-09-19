@@ -558,6 +558,31 @@ private fun HeroBody(
                 color = content,
             )
 
+            /*
+             * Which purse this actually is.
+             *
+             * The print system keeps its own bank (`PrintCenter."Bank"`), separate from the campus
+             * card. A student holding money on their card and reading $0.00 here concludes the app
+             * is broken, which is the most reliable way to be wrong about this app: the number is
+             * exactly what `/logon` returned, and at GMU that payload is literally
+             * `"Balance":{"Amount":"0.00","Purses":[]}`.
+             *
+             * Shown only when the number is zero and the server refuses top-ups, which is the one
+             * combination that looks like a fault. A deployment that takes payments in-app has an
+             * Add Funds button instead and needs no explaining.
+             */
+            val zero = (state.user?.balance?.let { it.amount ?: it.total } ?: 0.0) == 0.0
+            val bank = state.capabilities?.bankName?.takeIf { it.isNotBlank() }
+            if (zero && bank != null && state.capabilities?.canAddFunds != true) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "This is your $bank balance, which is not your campus card. Tap to see where " +
+                        "printing money comes from.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = content,
+                )
+            }
+
             if (purses.isNotEmpty() && variant != HeroVariant.Cached) {
                 Spacer(Modifier.height(10.dp))
                 Row(
