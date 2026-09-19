@@ -21,6 +21,7 @@ import dev.ahnafnafee.masonprint.data.model.obj
 import dev.ahnafnafee.masonprint.data.model.encode
 import dev.ahnafnafee.masonprint.data.model.toJsonObject
 import dev.ahnafnafee.masonprint.data.model.CostCenter
+import dev.ahnafnafee.masonprint.data.model.FinishingOptions
 import kotlinx.serialization.builtins.ListSerializer
 import dev.ahnafnafee.masonprint.data.net.ApiResult
 import dev.ahnafnafee.masonprint.data.net.Credentials
@@ -915,6 +916,25 @@ class Session(private val graph: AppGraph) {
      * request, not a receipt: GMU has echoed an empty code back from a 200 write, so the Result
      * screen says what the release was *asked* to charge, never "Charged to X".
      */
+    /**
+     * What this release will actually be billed to, for the receipt.
+     *
+     * Not the same as [AppState.fundingLabel], which reports the *session's* choice. When the user
+     * has not overridden anything, the release sends no funding key and the server bills whatever
+     * the job itself carries, so a job uploaded against a department is charged to that department
+     * while the session still says "my own balance". Reading the jobs is the only way the receipt
+     * can name the account the money came from. Mixed selections say so rather than picking one.
+     */
+    private fun fundingIntentFor(jobs: List<PrintJob>, chosen: String?): String {
+        chosen?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        val stored = jobs.mapNotNull { it.costCenterCode?.trim()?.takeIf { code -> code.isNotEmpty() } }.distinct()
+        return when (stored.size) {
+            0 -> "My own balance"
+            1 -> stored.single()
+            else -> "${stored.size} department accounts"
+        }
+    }
+
     fun releaseSelected(jobs: List<PrintJob>) {
         val target = graph.target ?: return
         val device = _state.value.selectedDevice
@@ -922,7 +942,7 @@ class Session(private val graph: AppGraph) {
         if (jobs.isEmpty()) return
         val names = jobs.associate { it.location to (it.name ?: it.location.substringAfterLast('/')) }
         val before = _state.value.balanceText
-        val intent = _state.value.fundingLabel
+        val intent = fundingIntentFor(jobs, costCenter)
         val printer = device?.label ?: "the selected printer"
         scope.launch {
             _state.update { it.copy(busy = "Releasing ${jobs.size} job(s)") }
@@ -1022,6 +1042,52 @@ class Session(private val graph: AppGraph) {
 
                 is ApiResult.Err -> _state.update {
                     it.copy(loadingTransactions = false, failure = result.failure)
+                }
+            }
+        }
+    }
+
+    /**
+     * `PATCH {UserUri}/printjobs/` — change copies, sides, colour, pages-per-side or page size on
+     * jobs already sitting in the queue.
+     *
+     * The server is the authority on whether this took. GMU answers 200 with a bare array of
+     * per-job rows and has been observed echoing a value back unchanged after accepting the write
+     * (docs/FINDINGS.md), so this reads the rows for refusals and then [refresh]es rather than
+     * assuming the request became the truth. The queue redraws from what the server now reports,
+     * which is why the dialog can be an editor at all: a change that silently did not stick shows
+     * up as the old value on the card a second later instead of as a lie in the UI.
+     */
+    fun applyFinishing(jobs: List<PrintJob>, options: FinishingOptions) {
+        val target = graph.target ?: return
+        if (jobs.isEmpty()) return
+        scope.launch {
+            _state.update { it.copy(busy = "Updating ${jobs.size} job(s)") }
+            val body = PrintRequests.update(
+                jobs = jobs,
+                finishing = FinishingPayload.from(options),
+                deviceLocation = _state.value.selectedDevice?.location,
+                costCenterCode = _state.value.costCenter,
+            )
+            when (val result = graph.api.patchJobs(target, body)) {
+                is ApiResult.Err -> _state.update { it.copy(busy = null, failure = result.failure) }
+                is ApiResult.Ok -> {
+                    val op = result.value
+                    _state.update {
+                        it.copy(
+                            busy = null,
+                            notice = when {
+                                op.failures.isNotEmpty() ->
+                                    op.failures.firstNotNullOfOrNull { r ->
+                                        cleanSentence(r.strIn("UserMessage", "Message")?.htmlUnescaped())
+                                    } ?: "${op.failures.size} of ${jobs.size} job(s) were not changed."
+
+                                else -> "Asked the server to change ${jobs.size} job" +
+                                    "${if (jobs.size == 1) "" else "s"}. The queue shows what it stored."
+                            },
+                        )
+                    }
+                    refresh()
                 }
             }
         }

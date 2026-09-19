@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Savings
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Work
 import androidx.compose.material3.Button
@@ -66,11 +67,74 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.ahnafnafee.masonprint.core.AppState
 import dev.ahnafnafee.masonprint.core.Session
 import dev.ahnafnafee.masonprint.ui.theme.SelectionBarCorner
+
+/**
+ * One decision on the selection bar: what it is, what it is set to now, and a tap to change it.
+ *
+ * The value gets the width because it is the answer; the label only has to name the question. A
+ * whole row rather than a chip so a printer name like `FX-ENG4-4413-5860` fits without an ellipsis,
+ * which is what forced this layout in the first place.
+ */
+@Composable
+private fun SettingRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    value: String,
+    onClick: () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        color = androidx.compose.ui.graphics.Color.Transparent,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp))
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                value,
+                style = MaterialTheme.typography.titleSmall,
+                textAlign = TextAlign.End,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+/**
+ * The current print settings, short enough to sit on a button.
+ *
+ * Says the value, not the noun: "2 copies" and "1-sided" tell a student what will come out of the
+ * machine, where "Options" only tells them a menu exists. Copies lead because they are the setting
+ * most often wrong and the only one that multiplies the cost. A selection whose jobs disagree says
+ * "Mixed" rather than picking one of them to display.
+ */
+internal fun finishingSummary(jobs: List<dev.ahnafnafee.masonprint.data.model.PrintJob>): String {
+    val all = jobs.mapNotNull { it.finishing }
+    if (all.isEmpty()) return "Options"
+    fun <T> agreed(pick: (dev.ahnafnafee.masonprint.data.model.FinishingOptions) -> T): T? =
+        all.map(pick).distinct().singleOrNull()
+    val copies = agreed { it.copies } ?: return "Mixed"
+    val duplex = agreed { it.duplex }
+    val mono = agreed { it.mono }
+    return listOfNotNull(
+        if ((copies ?: 1L) > 1L) "$copies copies" else null,
+        duplex?.let { if (it) "2-sided" else "1-sided" },
+        mono?.let { if (it) "B&W" else "Colour" },
+    ).joinToString(" · ").ifBlank { "Options" }
+}
 
 /**
  * What the selection bar asks the queue to do.
@@ -369,41 +433,9 @@ private fun QueueSelectionBar(
                             buildString {
                                 append(totalText)
                                 if (unpriced > 0) append(" · ").append(unpriced).append(" not priced yet")
-                                append("  ·  ")
-                                append(if (onDepartment) "charged to ${state.costCenter}" else "from my balance")
                             },
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-
-                /*
-                 * The two decisions made at the printer — which machine, who pays — are the labelled
-                 * buttons and each takes half the width, so they align instead of scrolling off-screen.
-                 * The rarer read-back and destructive actions (copies, estimate, delete) fold into an
-                 * overflow: on screen when wanted, out of the way when not.
-                 */
-                Spacer(Modifier.height(4.dp))
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    OutlinedButton(onClick = selection.onPrinter, modifier = Modifier.weight(1f)) {
-                        ButtonGlyph(Icons.Filled.Print)
-                        Text(
-                            state.selectedDevice?.label?.takeIf { it.isNotBlank() } ?: "Printer",
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    OutlinedButton(onClick = selection.onChargeTo, modifier = Modifier.weight(1f)) {
-                        ButtonGlyph(if (onDepartment) Icons.Filled.BusinessCenter else Icons.Filled.Work)
-                        Text(
-                            if (onDepartment) "Charge to" else "Pay with",
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -413,11 +445,6 @@ private fun QueueSelectionBar(
                             Icon(Icons.Filled.MoreVert, contentDescription = "More actions")
                         }
                         DropdownMenu(expanded = moreActionsOpen, onDismissRequest = { moreActionsOpen = false }) {
-                            DropdownMenuItem(
-                                text = { Text("Copies & finishing") },
-                                leadingIcon = { Icon(Icons.Filled.ContentCopy, null) },
-                                onClick = { moreActionsOpen = false; selection.onCopies() },
-                            )
                             DropdownMenuItem(
                                 text = { Text("Estimate cost") },
                                 leadingIcon = { Icon(Icons.Filled.Calculate, null) },
@@ -431,6 +458,41 @@ private fun QueueSelectionBar(
                         }
                     }
                 }
+
+                /*
+                 * Three decisions are made before a release: which machine, who pays, and how it
+                 * prints. They are peers, so they are three peer rows.
+                 *
+                 * They were two buttons and an overflow, which is how the app ended up with no
+                 * discoverable way to set copies, sides or colour: a student looking for them found
+                 * two buttons about machines and money, and a dot menu that reads as "rare and
+                 * destructive". Making them three equal buttons instead only moved the problem,
+                 * because three labels plus an overflow on a phone truncates every one of them to
+                 * "Pri…", "Pa…", "2-…".
+                 *
+                 * Full-width rows give each its whole line, so each can state its *current value*
+                 * instead of a noun. The bar then answers all three questions without being opened,
+                 * which is the actual fix: the settings were not merely hidden, they were invisible.
+                 */
+                Spacer(Modifier.height(6.dp))
+                SettingRow(
+                    icon = Icons.Filled.Print,
+                    label = "Printer",
+                    value = state.selectedDevice?.label?.takeIf { it.isNotBlank() } ?: "Not chosen yet",
+                    onClick = selection.onPrinter,
+                )
+                SettingRow(
+                    icon = if (onDepartment) Icons.Filled.BusinessCenter else Icons.Filled.Work,
+                    label = "Pay with",
+                    value = if (onDepartment) state.costCenter.orEmpty() else "My own balance",
+                    onClick = selection.onChargeTo,
+                )
+                SettingRow(
+                    icon = Icons.Filled.Tune,
+                    label = "Print",
+                    value = finishingSummary(chosen),
+                    onClick = selection.onCopies,
+                )
 
                 if (releaseBlocked) {
                     Spacer(Modifier.height(4.dp))

@@ -101,6 +101,7 @@ import dev.ahnafnafee.masonprint.core.uploadProgressDetail
 import dev.ahnafnafee.masonprint.core.stillAwaitsCosting
 import dev.ahnafnafee.masonprint.data.model.CostCenter
 import dev.ahnafnafee.masonprint.data.model.Device
+import dev.ahnafnafee.masonprint.data.model.FinishingOptions
 import dev.ahnafnafee.masonprint.data.model.PrintJob
 import dev.ahnafnafee.masonprint.ui.theme.MasonType
 import dev.ahnafnafee.masonprint.ui.theme.MasonPillShape
@@ -143,7 +144,6 @@ fun JobsScreen(
     onPickDocument: () -> Unit,
 ) {
     var showReleased by rememberSaveable { mutableStateOf(false) }
-    var devicePickerOpen by rememberSaveable { mutableStateOf(false) }
     var fundingOpen by rememberSaveable { mutableStateOf(false) }
     var copiesOpen by rememberSaveable { mutableStateOf(false) }
     // Not `rememberSaveable`: a cost preview is an answer to a question that was asked a second ago,
@@ -179,10 +179,17 @@ fun JobsScreen(
         onPickDocument = onPickDocument,
         selection = QueueSelection(
             onClear = { session.clearSelection() },
-            onPrinter = {
-                devicePickerOpen = true
-                if (state.devices.isEmpty()) session.loadDevices()
-            },
+            /*
+             * The release screen, not a dialog of its own.
+             *
+             * There were two printer pickers. This one was an `AlertDialog` holding all 302 devices
+             * as a flat, unsearchable list inside a scroll container the dialog fights for gestures,
+             * so finding a named machine meant flicking past a few hundred rows that all begin
+             * "FX-". The release screen's picker already searches by building, room and model, and
+             * groups by building and floor, and it keeps the selection while you use it. Sending
+             * this button there deletes the worse of the two rather than teaching it to search.
+             */
+            onPrinter = { router.push(Route.Release) },
             onChargeTo = { fundingOpen = true },
             onCopies = { copiesOpen = true },
             onEstimate = estimate,
@@ -303,29 +310,17 @@ fun JobsScreen(
         }
     }
 
-    if (devicePickerOpen) {
-        DevicePicker(
-            devices = state.devices,
-            current = state.selectedDevice,
-            onDismiss = { devicePickerOpen = false },
-            onOpen = {
-                devicePickerOpen = false
-                session.loadDevices()
-            },
-            onPick = {
-                session.selectDevice(it)
-                devicePickerOpen = false
-            },
-        )
-    }
-
     if (copiesOpen) {
         CopiesDialog(
             jobs = chosen,
+            // The server's own switch (`PrintCenter."Finishing Options Update"`). Where a campus
+            // turns it off the controls are visible but inert, with the reason said out loud,
+            // rather than the dialog pretending the settings do not exist.
+            canEdit = state.capabilities?.finishingUpdateAllowed != false,
             onDismiss = { copiesOpen = false },
-            onSendInstead = {
+            onApply = { options ->
                 copiesOpen = false
-                router.push(Route.Send)
+                session.applyFinishing(chosen, options)
             },
         )
     }
@@ -1109,72 +1104,141 @@ private fun EstimateDialog(
 }
 
 /**
- * Copies and finishing, as a read-back rather than an editor.
+ * Copies, sides and colour, as an editor.
  *
- * `Session` has no call that updates finishing, and that is deliberate: GMU accepts a `PATCH` to
- * `{UserUri}/printjobs/` with HTTP 200 while echoing `CostCenterCode: ""` back, so a 200 does not mean
- * the write took (docs/FINDINGS.md). Showing steppers that might silently not persist is worse than
- * saying where the number is really set — at send time — and offering to go there.
+ * It was a read-back, on the grounds that GMU answers a `PATCH` to `{UserUri}/printjobs/` with 200
+ * while sometimes echoing a value back unchanged, so a 200 is not proof the write took. That is
+ * still true, and it argues for *not trusting the response*, not for having no controls: with no
+ * editor here and none on the upload screen either, the app could not change a single print
+ * setting, and this dialog's own advice to "change when uploading" pointed at a screen that has no
+ * such control.
+ *
+ * The resolution is write-then-re-read. [Session.applyFinishing] PATCHes and refreshes, and the
+ * queue redraws from what the server now reports, so a change that did not stick shows up as the
+ * old value on the card rather than as a lie in a form. This dialog claims only that the change was
+ * asked for.
+ *
+ * Fields start from the selection where it agrees and from the server's default where it does not,
+ * so editing several jobs at once cannot silently flatten a setting the user never looked at.
  */
 @Composable
 private fun CopiesDialog(
     jobs: List<PrintJob>,
+    canEdit: Boolean,
     onDismiss: () -> Unit,
-    onSendInstead: () -> Unit,
+    onApply: (FinishingOptions) -> Unit,
 ) {
+    val seed = remember(jobs) {
+        val all = jobs.mapNotNull { it.finishing }
+        fun <T> agreed(pick: (FinishingOptions) -> T): T? = all.map(pick).distinct().singleOrNull()
+        FinishingOptions(
+            mono = agreed { it.mono } ?: true,
+            duplex = agreed { it.duplex } ?: false,
+            pagesPerSide = agreed { it.pagesPerSide } ?: 1L,
+            copies = agreed { it.copies } ?: 1L,
+            defaultPageSize = agreed { it.defaultPageSize } ?: "Letter",
+            pageRange = agreed { it.pageRange } ?: "",
+        )
+    }
+    var copies by remember(seed) { mutableStateOf(seed.copies ?: 1L) }
+    var duplex by remember(seed) { mutableStateOf(seed.duplex ?: false) }
+    var mono by remember(seed) { mutableStateOf(seed.mono ?: true) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = { Icon(Icons.Filled.ContentCopy, null) },
         title = { Text("Copies and finishing") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 if (jobs.isEmpty()) {
-                    Text("Select at least one job to read its options back.", style = MaterialTheme.typography.bodyMedium)
-                }
-                jobs.forEach { job ->
-                    val fin = job.finishing
+                    Text("Select at least one job first.", style = MaterialTheme.typography.bodyMedium)
+                } else {
+                    Text(
+                        if (jobs.size == 1) jobs.single().name ?: "Untitled document" else "${jobs.size} documents",
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+
+                    // A stepper, not a text field: the count is small, and typing a number on a
+                    // phone to print two of something is a keyboard nobody needed.
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                job.name ?: "Untitled document",
-                                style = MaterialTheme.typography.titleSmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                listOfNotNull(
-                                    fin?.copies?.let { "$it cop" + if (it == 1L) "y" else "ies" } ?: "copies unknown",
-                                    fin?.let { if (it.duplex == true) "double-sided" else "one-sided" },
-                                    fin?.pagesPerSide?.takeIf { it > 1 }?.let { "$it pages per side" },
-                                    fin?.colourLabel,
-                                    fin?.defaultPageSize?.takeIf { it.isNotBlank() },
-                                    fin?.pageRange?.takeIf { it.isNotBlank() }?.let { "pages $it" },
-                                ).joinToString("  ·  "),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
+                        Text("Copies", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                        OutlinedButton(
+                            onClick = { if (copies > 1L) copies -= 1L },
+                            enabled = canEdit && copies > 1L,
+                        ) { Text("-", maxLines = 1) }
+                        Text(
+                            copies.toString(),
+                            Modifier.width(48.dp),
+                            textAlign = TextAlign.Center,
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        OutlinedButton(
+                            onClick = { if (copies < 99L) copies += 1L },
+                            enabled = canEdit && copies < 99L,
+                        ) { Text("+", maxLines = 1) }
                     }
+
+                    ChoiceRow(
+                        label = "Sides",
+                        options = listOf("One-sided" to false, "Two-sided" to true),
+                        selected = duplex,
+                        enabled = canEdit,
+                        onSelect = { duplex = it },
+                    )
+                    ChoiceRow(
+                        label = "Colour",
+                        options = listOf("Black & white" to true, "Colour" to false),
+                        selected = mono,
+                        enabled = canEdit,
+                        onSelect = { mono = it },
+                    )
+
+                    Text(
+                        if (canEdit) {
+                            "The server reprices the job, so the cost can change. Nothing is charged " +
+                                "until you release at a printer."
+                        } else {
+                            "This server does not accept finishing changes after upload."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
-                Text(
-                    "Mason Print shows what the server recorded for these jobs. Copies, sides, and " +
-                        "colour are chosen when the document is uploaded, and this server does not accept " +
-                        "a reliable change afterwards. A 200 from the update call does not mean the " +
-                        "new value stuck.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
         },
         confirmButton = {
-            Button(onClick = onSendInstead) {
-                Icon(Icons.Filled.Add, null, Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Change when uploading")
-            }
+            Button(
+                onClick = { onApply(seed.copy(copies = copies, duplex = duplex, mono = mono)) },
+                enabled = canEdit && jobs.isNotEmpty(),
+            ) { Text("Save") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+/** A labelled two-way choice, as a pair of buttons rather than a dropdown nobody can see the state of. */
+@Composable
+private fun <T> ChoiceRow(
+    label: String,
+    options: List<Pair<String, T>>,
+    selected: T,
+    enabled: Boolean,
+    onSelect: (T) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(label, style = MaterialTheme.typography.bodyMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            options.forEach { (text, value) ->
+                if (value == selected) {
+                    Button(onClick = { onSelect(value) }, enabled = enabled) { Text(text, maxLines = 1) }
+                } else {
+                    OutlinedButton(onClick = { onSelect(value) }, enabled = enabled) { Text(text, maxLines = 1) }
+                }
+            }
+        }
+    }
 }
 
 /**
@@ -1340,51 +1404,6 @@ private fun SelectableFundingRow(
     }
 }
 
-/**
- * Which printer the code will be sent to. "Server default" is a real option and is the one that matches
- * what the Print Center web UI does when you do not choose.
- */
-@Composable
-private fun DevicePicker(
-    devices: List<Device>,
-    current: Device?,
-    onDismiss: () -> Unit,
-    onOpen: () -> Unit,
-    onPick: (Device?) -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = { Icon(Icons.Filled.Print, null) },
-        title = { Text("Release at") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (devices.isEmpty()) {
-                    Text(
-                        "No printers have been read from this server yet. Load them, or scan the code " +
-                            "on the machine. Reading the code is the only way to be sure the release " +
-                            "goes to the printer standing in front of you.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    OutlinedButton(onClick = onOpen, modifier = Modifier.fillMaxWidth()) { Text("Load printers") }
-                }
-                devices.forEach { device ->
-                    SelectableFundingRow(
-                        label = device.label,
-                        supporting = device.sublabel,
-                        selected = current?.location == device.location,
-                        onClick = { onPick(device) },
-                    )
-                }
-            }
-        },
-        // Same correction as the funding picker: the confirm button performs the action and the
-        // dismiss button dismisses. These were inverted — "Close" sat in the confirm slot while the
-        // dismiss slot quietly chose a printer.
-        confirmButton = { TextButton(onClick = { onPick(null) }) { Text("Use server default") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
-}
 
 // --------------------------------------------------------------------------- small pure helpers
 

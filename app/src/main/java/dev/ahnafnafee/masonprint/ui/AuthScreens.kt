@@ -62,6 +62,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.ahnafnafee.masonprint.BuildConfig
 import dev.ahnafnafee.masonprint.core.AppState
@@ -119,26 +120,37 @@ internal fun ConnectScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Spacer(Modifier.height(24.dp))
-        // Wordmark in a filled, generously rounded container: the first cue that this is a designed
-        // surface and not the vendor's Honeycomb-era ActionBar hosting a 2013 web skin.
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Surface(
-                shape = MaterialTheme.shapes.large,
-                color = MaterialTheme.colorScheme.primaryContainer,
-                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(56.dp),
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(Icons.Filled.Print, null, modifier = Modifier.size(28.dp))
-                }
-            }
-            Spacer(Modifier.width(14.dp))
+        /*
+         * The university's mark, same artwork and same theme-picked variant as the sign-in screen.
+         * This is the first screen the app ever shows, and it asks which server to trust; carrying
+         * the mark here is what makes that question read as the university's rather than a
+         * stranger's. The reversed cut is used in dark mode because the wordmark is #333333 and
+         * would vanish against #111318.
+         */
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Image(
+                painter = painterResource(
+                    if (ThemeChoice.mode.isDark()) {
+                        R.drawable.mason_logo_vector_dark
+                    } else {
+                        R.drawable.mason_logo_vector
+                    },
+                ),
+                contentDescription = "George Mason University",
+                modifier = Modifier.width(212.dp),
+            )
+            Spacer(Modifier.height(12.dp))
             Text("Mason Print", style = MaterialTheme.typography.headlineMedium)
         }
         Text(
             "Campus print queue, without the browser inside the app.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
         )
 
         OutlinedTextField(

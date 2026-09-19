@@ -1,9 +1,13 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@file:OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class,
+)
 
 package dev.ahnafnafee.masonprint.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -130,9 +134,9 @@ fun DiagnosticsScreen(
                     "Privileges.Printing.PayForPrint.CostCenters. Where this is Deny the server is unlikely to accept a CostCenterCode, but the app still lets you type one because the privilege and the code list are maintained separately.",
                 )
                 Bool(
-                    "Charge somebody else",
+                    "Bill another person's account",
                     caps?.chargingUserChangeAllowed == true,
-                    "Privileges.Printing.Administration.ChangeChargingUser. Gates the Owner key on a release body. This app never sends one.",
+                    "Privileges.Printing.Administration.ChangeChargingUser: an administrator releasing a job so that a different *person* is billed. Not related to charging a department, which is the row above and works normally. This app never asks for it.",
                 )
                 Row(Modifier.fillMaxWidth()) {
                     Label("Releasing as"); Value(state.fundingLabel)
@@ -209,12 +213,23 @@ fun DiagnosticsScreen(
                     "${log.size} entries this session · ${if (graph.prefs.diagnosticsEnabled) "response bodies captured" else "response bodies not captured"}",
                     style = MaterialTheme.typography.labelMedium,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { showLog = true }) { Text("View") }
+                /*
+                 * A FlowRow, because these three labels do not fit one line on a phone and the
+                 * middle one changes width when it is toggled. A plain Row squeezed the last button
+                 * until "Clear" broke across two lines inside its own pill.
+                 */
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(onClick = { showLog = true }) { Text("View", maxLines = 1) }
                     OutlinedButton(onClick = { graph.prefs.diagnosticsEnabled = !graph.prefs.diagnosticsEnabled }) {
-                        Text(if (graph.prefs.diagnosticsEnabled) "Stop capturing bodies" else "Capture full bodies")
+                        Text(
+                            if (graph.prefs.diagnosticsEnabled) "Stop capturing bodies" else "Capture full bodies",
+                            maxLines = 1,
+                        )
                     }
-                    OutlinedButton(onClick = { MpLog.clear() }) { Text("Clear") }
+                    OutlinedButton(onClick = { MpLog.clear() }) { Text("Clear", maxLines = 1) }
                 }
                 if (showLog) {
                     SelectionContainer {
