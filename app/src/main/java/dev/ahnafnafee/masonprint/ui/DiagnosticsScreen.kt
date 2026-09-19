@@ -306,8 +306,8 @@ private fun Bool(label: String, allowed: Boolean, note: String? = null) {
     Column {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(if (allowed) "✓" else "✗", color = if (allowed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
-            Label(label)
-            Value(if (allowed) "allowed" else "not allowed")
+            Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+            Text(if (allowed) "allowed" else "not allowed", style = MaterialTheme.typography.bodySmall)
         }
         note?.let {
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

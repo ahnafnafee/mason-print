@@ -16,6 +16,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -47,6 +48,7 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Work
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -148,9 +150,9 @@ internal fun finishingSummary(jobs: List<dev.ahnafnafee.masonprint.data.model.Pr
     val duplex = agreed { it.duplex }
     val mono = agreed { it.mono }
     return listOfNotNull(
-        if ((copies ?: 1L) > 1L) "$copies copies" else null,
-        duplex?.let { if (it) "2-sided" else "1-sided" },
-        mono?.let { if (it) "B&W" else "Colour" },
+        if (copies > 1L) "$copies copies" else null,
+        duplex?.let { if (it) "2-sided" else "1-sided" } ?: "Mixed sides",
+        mono?.let { if (it) "B&W" else "Colour" } ?: "Mixed colour",
     ).joinToString(" · ").ifBlank { "Options" }
 }
 
@@ -345,23 +347,24 @@ internal fun QueueScaffold(
                         val totalText =
                             state.capabilities?.formats?.money(priced.sumOf { it.cost ?: 0.0 }) ?: "—"
                         val unpriced = waiting.size - priced.size
-                        Row(
+                        FlowRow(
                             Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 10.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             /*
-                             * The pill takes the full brand green over the bar's tint of the same
-                             * colour — the tone step is the separation. A plain `Surface` with the
-                             * fixed action pair, not a button component: white on Mason Green is
-                             * 7.1 : 1, the palette's own filled-button pairing, and the tonal
-                             * default would be cool grey on green, which reads muddy.
+                             * The Release pill, in the pair [MasonColors.barPill] spells per theme:
+                             * white with Mason-green ink in light — a saturated green pill on this
+                             * grey-blue read as a muddy dark lump, while white-on-grey-blue is
+                             * instantly a button — and mint with dark ink in dark, where a plain
+                             * surface pill would be near-black on near-dark and vanish. Same shape
+                             * either way; the ink keeps the brand.
                              */
                             Surface(
                                 onClick = { router.push(Route.Release) },
                                 shape = MasonPillShape,
-                                color = currentMasonColors.barAction,
-                                contentColor = currentMasonColors.onBarAction,
+                                color = currentMasonColors.barPill,
+                                contentColor = currentMasonColors.onBarPill,
                             ) {
                                 Row(
                                     Modifier.padding(horizontal = 20.dp, vertical = 13.dp),
@@ -372,7 +375,7 @@ internal fun QueueScaffold(
                                     Text(
                                         "Release at a printer",
                                         style = MaterialTheme.typography.labelLarge,
-                                        maxLines = 1,
+                                        textAlign = TextAlign.Center,
                                     )
                                 }
                             }
@@ -501,12 +504,8 @@ private fun QueueSelectionBar(
         val onDepartment = state.costCenter?.isNotBlank() == true
         val balance = state.user?.balance?.let { it.amount ?: it.total }
         val arrears = balance != null && balance < 0.0
-        /*
-         * A negative balance gates release only when the student's own purse is what would pay
-         * (§5.6 `arrears`). On a cost-centre account the department is charged and the student's
-         * arrears do not move, so gating there would refuse a release the server would accept.
-         */
-        val releaseBlocked = arrears && !onDepartment
+        // A negative balance is a warning. The server's cost/release response decides eligibility.
+        val showBalanceWarning = arrears && !onDepartment
         var moreActionsOpen by rememberSaveable { mutableStateOf(false) }
 
         Surface(
@@ -591,11 +590,10 @@ private fun QueueSelectionBar(
                     onClick = selection.onCopies,
                 )
 
-                if (releaseBlocked) {
+                if (showBalanceWarning) {
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "Your balance is below zero. Add funds before releasing. The server decides " +
-                            "at the printer.",
+                        "Your balance is below zero. Add funds or review the price; the server decides whether release is allowed.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSecondaryContainer,
                     )
@@ -616,17 +614,19 @@ private fun QueueSelectionBar(
                 }
 
                 Spacer(Modifier.height(8.dp))
+                // The same pill pair as the idle bar's Release button, for the same reason.
                 Button(
-                    onClick = if (releaseBlocked) selection.onAddFunds else selection.onRelease,
+                    onClick = selection.onRelease,
+                    enabled = state.busy == null && count > 0,
                     modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = currentMasonColors.barPill,
+                        contentColor = currentMasonColors.onBarPill,
+                    ),
                 ) {
                     Text(
-                        when {
-                            releaseBlocked -> "Add funds first"
-                            else -> "Release $count ${if (count == 1) "job" else "jobs"} · $totalText"
-                        },
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        "Review $count ${if (count == 1) "job" else "jobs"} · $totalText",
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                     )
                 }
             }

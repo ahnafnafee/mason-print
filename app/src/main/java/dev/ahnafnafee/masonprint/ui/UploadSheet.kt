@@ -121,13 +121,7 @@ fun UploadSheet(
     val caps = state.capabilities
     val uploading = state.upload != null
 
-    // What this device last handed the app, for the case where the sheet was reopened with no batch
-    // in `AppState`. `remember`, because resolving it opens a file descriptor to stat the size; the
-    // keys are the moments at which "the last file" can have changed.
-    val restored = remember(context, uploading, state.busy, state.failure) {
-        lastPickedFiles(context)
-    }
-    val files = state.uploadFiles.ifEmpty { restored }
+    val files = state.uploadFiles
     val current = files.getOrNull(state.uploadIndex - 1)
 
     val shown by animateFloatAsState(
@@ -139,7 +133,7 @@ fun UploadSheet(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Upload a document") },
+                title = { Text("Upload documents") },
                 navigationIcon = {
                     IconButton(onClick = { router.pop() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -196,30 +190,6 @@ fun UploadSheet(
 }
 
 // ------------------------------------------------------------------ the file, and the transfer --
-
-/**
- * The fallback "what was picked" list: at most the newest document this device handed the app,
- * resolved through the same factory the upload itself uses so the name and size on screen are the
- * name and size that would have gone on the wire.
- *
- * `MainActivity.persist` takes a persistable read grant so this works after a rotation. It is a
- * fallback only — the platform's grant list holds every file ever permitted and has no notion of a
- * batch, so it cannot reconstruct a multi-file pick. The batch itself lives in
- * [AppState.uploadFiles], recorded by the code that received it.
- */
-private fun lastPickedFiles(context: Context): List<PickedFile> =
-    runCatching {
-        val newest = context.contentResolver.persistedUriPermissions
-            .filter { permission ->
-                val scheme = permission.uri?.scheme
-                scheme == "content" || scheme == "file"
-            }
-            // `UriPermission.persistedTime` is what the framework exposes publicly here;
-            // INVALID_TIME (0) sorts to the back, which is the right answer for a grant the
-            // platform cannot date.
-            .maxByOrNull { it.persistedTime }
-        newest?.let { UploadFactory.fromUri(context, it.uri) }?.let { listOf(PickedFile.of(it)) }
-    }.getOrNull().orEmpty()
 
 @Composable
 private fun SendingCard(state: AppState, picked: PickedFile?, shown: Float, router: Router) {
@@ -415,9 +385,7 @@ private fun PickCard(
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     Text("Choose files, and they start uploading", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "The picker is Android's own. Long-press the first file and tap the rest to " +
-                            "upload a stack at once. Choosing is the upload. There is no second " +
-                            "button, and it survives rotating the phone or going back to the queue.",
+                        "Select one or more documents in the file picker. Upload starts when you confirm your selection and continues if you return to the queue.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -533,11 +501,9 @@ private fun SwitchChip(allowed: Boolean, label: String) {
 @Composable
 private fun FinishingCard() {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        SectionLabel("Finishing")
+        SectionLabel("Print settings")
         Text(
-            "Colour, sides, pages per side, copies and page size come from what this server " +
-                "publishes as its defaults. Once the job is in the queue, the queue's Copies dialog " +
-                "reads back what the server recorded for it.",
+            "After uploading, select documents in your queue and tap Print to change colour, sides and copies. Available settings depend on each document.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -599,8 +565,7 @@ private fun ChargeToSection(
         }
 
         Text(
-            "The centre is applied when you release, not at upload: GMU rejects a centre written " +
-                "onto a job before the server has priced it.",
+            "Your chosen funding source is checked with the price before release.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

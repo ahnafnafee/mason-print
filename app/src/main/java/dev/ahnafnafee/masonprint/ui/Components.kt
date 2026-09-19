@@ -237,27 +237,15 @@ internal fun NoteCard(
         color = bg,
         contentColor = fg,
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.Top,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            if (icon != null) {
-                Box(
-                    Modifier.size(44.dp).clip(RoundedCornerShape(percent = 50)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(icon, null, modifier = Modifier.size(22.dp), tint = fg)
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (icon != null) Icon(icon, null, modifier = Modifier.padding(top = 2.dp).size(24.dp), tint = fg)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text(title, style = MaterialTheme.typography.titleMedium, color = fg)
+                    Text(body, style = MaterialTheme.typography.bodyMedium, color = fg)
                 }
             }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(title, style = MaterialTheme.typography.titleMedium, color = fg)
-                Text(body, style = MaterialTheme.typography.bodyMedium, color = fg)
-                if (action != null) {
-                    Spacer(Modifier.height(6.dp))
-                    action()
-                }
-            }
+            if (action != null) action()
         }
     }
 }

@@ -198,6 +198,9 @@ data class MasonColors(
     val warn: Color,
     val warnContainer: Color,
     val onWarnContainer: Color,
+    /** Colour printing uses blue so it cannot be mistaken for a success or a funding source. */
+    val colourPrintContainer: Color,
+    val onColourPrintContainer: Color,
     /** Full-saturation Mason Gold: accents and containers only, never behind white type. */
     val brandGold: Color,
     /**
@@ -221,6 +224,16 @@ data class MasonColors(
      */
     val barAction: Color,
     val onBarAction: Color,
+    /**
+     * The Release pill (and the selection bar's Release button): the control that sits on the
+     * grey-blue bar.
+     *
+     * Light wants a white pill with Mason-green ink — a saturated green pill on `secondaryContainer`
+     * read as a muddy dark lump — and dark wants the reverse emphasis, the mint of the FAB family
+     * with dark ink, because a `surface` pill in dark is near-black on near-dark and disappears.
+     */
+    val barPill: Color,
+    val onBarPill: Color,
 )
 
 val MasonColorsLight = MasonColors(
@@ -230,11 +243,15 @@ val MasonColorsLight = MasonColors(
     warn = Color(0xFF7C5800),
     warnContainer = Color(0xFFFFE3A1),
     onWarnContainer = Color(0xFF271900),
+    colourPrintContainer = Color(0xFFDDF3F8),
+    onColourPrintContainer = Color(0xFF174D59),
     brandGold = MasonBrand.Gold,
     brandGoldInk = Color(0xFF271900),
     brandCharcoal = MasonBrand.Charcoal,
     barAction = MasonBrand.Green,
     onBarAction = Color(0xFFFFFFFF),
+    barPill = Color(0xFFFFFFFF),
+    onBarPill = MasonBrand.Green,
 )
 
 val MasonColorsDark = MasonColors(
@@ -244,11 +261,15 @@ val MasonColorsDark = MasonColors(
     warn = Color(0xFFF2C33F),
     warnContainer = Color(0xFF5D4200),
     onWarnContainer = Color(0xFFFFE3A1),
+    colourPrintContainer = Color(0xFF183E48),
+    onColourPrintContainer = Color(0xFFACE5F0),
     brandGold = MasonBrand.Gold,
     brandGoldInk = Color(0xFF271900),
     brandCharcoal = MasonBrand.Charcoal,
     barAction = Color(0xFF80DBA0),
     onBarAction = Color(0xFF003919),
+    barPill = Color(0xFF80DBA0),
+    onBarPill = Color(0xFF003919),
 )
 
 val LocalMasonColors = staticCompositionLocalOf { MasonColorsLight }

@@ -20,6 +20,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.ui.Alignment
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -63,6 +67,7 @@ fun PrintCenterWebView(
     onBack: () -> Unit,
 ) {
     var progress by remember { mutableStateOf(0) }
+    var pageError by remember { mutableStateOf<String?>(null) }
     var webView by remember { mutableStateOf<WebView?>(null) }
 
     BackHandler(enabled = true) {
@@ -73,7 +78,7 @@ fun PrintCenterWebView(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Print Center (server UI)", style = MaterialTheme.typography.titleMedium) },
+                title = { Text("Print Center", style = MaterialTheme.typography.titleMedium) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close")
@@ -103,17 +108,24 @@ fun PrintCenterWebView(
                             // Hand the native session over before the first request goes out.
                             val cm = CookieManager.getInstance()
                             cm.setAcceptCookie(true)
-                            cookies.forEach { cookie -> cm.setCookie(url, cookie) }
-                            cm.flush()
 
                             webViewClient = object : WebViewClient() {
+                                override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                                    pageError = null
+                                }
+
+                                override fun onReceivedHttpError(view: WebView, request: android.webkit.WebResourceRequest, response: android.webkit.WebResourceResponse) {
+                                    if (request.isForMainFrame) pageError = "The page returned an error (${response.statusCode})."
+                                }
+
                                 override fun onPageFinished(view: WebView, finishedUrl: String) {
-                                    MpLog.info("web", "Print Center loaded $finishedUrl")
+                                    MpLog.info("web", "Print Center page loaded")
                                 }
 
                                 override fun onReceivedError(view: WebView, request: android.webkit.WebResourceRequest, error: android.webkit.WebResourceError) {
                                     if (request.isForMainFrame) {
                                         MpLog.error("web", "Print Center failed: ${error.description}")
+                                        pageError = "Check your connection and try loading the page again."
                                     }
                                 }
                             }
@@ -123,14 +135,36 @@ fun PrintCenterWebView(
                                 }
                             }
                             webView = this
-                            loadUrl(url)
+                            if (cookies.isEmpty()) loadUrl(url) else {
+                                var remaining = cookies.size
+                                cookies.forEach { cookie ->
+                                    cm.setCookie(url, cookie) {
+                                        remaining--
+                                        if (remaining == 0 && webView === this) {
+                                            cm.flush()
+                                            loadUrl(url)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     },
                     onRelease = { wv ->
+                        webView = null
                         wv.stopLoading()
                         wv.destroy()
                     },
                 )
+                pageError?.let { error ->
+                    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                        Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center,
+                            horizontalAlignment = Alignment.CenterHorizontally) {
+                            EmptyState(title = "Could not load Print Center", body = error)
+                            TextButton(onClick = { pageError = null; webView?.reload() }) { Text("Try again") }
+                            TextButton(onClick = onBack) { Text("Back to Mason Print") }
+                        }
+                    }
+                }
             }
         }
     }

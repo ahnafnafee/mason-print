@@ -5,6 +5,7 @@ package dev.ahnafnafee.masonprint.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -103,9 +104,7 @@ fun AddFundsScreen(
             if (overdrawn) {
                 NoteCard(
                     title = "Below zero",
-                    body = "The server will not release a job while the balance is negative. " +
-                        "Nothing in this app can change that from here. The top-up has to " +
-                        "arrive from the campus side first.",
+                    body = "Your print balance is negative. You can add funds through your campus. The server decides whether your selected funding source can cover a release.",
                     icon = Icons.Filled.Error,
                     tone = MasonTone.Error,
                 )
@@ -114,7 +113,7 @@ fun AddFundsScreen(
             SectionGap()
             if (canPayInApp) {
                 PayingServerCopy(onOpenGateway = { router.push(Route.PrintCenter) })
-            } else {
+            } else if (state.host.substringBefore(':').let { it == "gmu.edu" || it.endsWith(".gmu.edu") }) {
                 DenyingServerCopy(
                     addFundsSetting = when (caps?.addFundsEnabled) {
                         true -> "Allow"
@@ -124,13 +123,16 @@ fun AddFundsScreen(
                     onOpenCampusPage = { uriHandler.openUri(MASON_MONEY_URL) },
                     onOpenPrintCenter = { router.push(Route.PrintCenter) },
                 )
+            } else {
+                NoteCard(title = "Add funds through your campus",
+                    body = "This server has no payment option available here. Open its Print Center or contact your campus print service for top-up instructions.",
+                    action = { TextButton(onClick = { router.push(Route.PrintCenter) }) { Text("Open Print Center") } })
             }
 
             SectionGap()
             NoteCard(
-                title = "No card fields in this app",
-                body = "Card details are typed on the campus page in your browser. Mason Print " +
-                    "never sees them, never stores them, and has no screen that asks for them.",
+                title = "Payments through your campus",
+                body = "Enter payment details only on the campus payment page. Return here and refresh to check your balance.",
                 icon = Icons.Filled.Lock,
                 tone = MasonTone.Neutral,
             )
@@ -178,8 +180,9 @@ private fun BalanceCard(state: AppState) {
     }
     val purses = state.user?.balance?.purses.orEmpty().filter { (it.amount ?: 0.0) != 0.0 }
     if (purses.isNotEmpty()) {
-        Row(
+        FlowRow(
             Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             purses.take(3).forEach { purse ->
@@ -202,16 +205,13 @@ private fun DenyingServerCopy(
 ) {
     Text("Mason Print cannot take a payment", style = MaterialTheme.typography.headlineSmall)
     Text(
-        "This print server answered Add Funds: $addFundsSetting and reported no credit card " +
-            "gateway. There is nothing for the app to charge, so it shows no card fields and " +
-            "no checkout.",
+        "Add funds through the campus payment page, then return here to refresh your balance.",
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     NoteCard(
         title = "What actually raises your balance",
-        body = "Your print balance is a Mason Money purse. Open the campus page, sign in, and " +
-            "use Transfer Funds. Pull to refresh here afterwards and the new amount appears.",
+        body = "Open Mason Money and follow the campus instructions for adding or transferring funds to printing.",
         icon = Icons.Filled.AccountBalanceWallet,
         tone = MasonTone.Money,
         action = {
@@ -242,8 +242,7 @@ private fun DenyingServerCopy(
         Text("Open the Print Center instead")
     }
     Text(
-        "It all happens on the campus page: the money arrives in this purse as a TF. Transfer " +
-            "Funds. Row, which is what the list below reads back.",
+        "Recent credits appear below after the print server receives them.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -252,12 +251,9 @@ private fun DenyingServerCopy(
 /** The branch for a server that does allow funds — and it is still never an in-app form (§5.6). */
 @Composable
 private fun PayingServerCopy(onOpenGateway: () -> Unit) {
-    Text("This server takes payments. Somewhere else", style = MaterialTheme.typography.headlineSmall)
+    Text("Add funds through your campus", style = MaterialTheme.typography.headlineSmall)
     Text(
-        "Its settings answer Add Funds: Allow with a card gateway. Mason Print does not " +
-            "re-implement that gateway as a form: the gateway is a web page the server owns, so " +
-            "the handoff below opens the server's own page. Still never a card form inside " +
-            "the app.",
+        "Open your campus Print Center and choose its add-funds option. Return here afterwards to check your balance.",
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -266,11 +262,10 @@ private fun PayingServerCopy(onOpenGateway: () -> Unit) {
         modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
         shape = MasonPillShape,
     ) {
-        Text("Open the server's payment page")
+        Text("Open Print Center to add funds")
     }
     Text(
-        "At a campus whose server allows it, this screen is replaced by the server's own " +
-            "payment gateway, opened as a hosted web page. Still never a form inside the app.",
+        "Payment options and processing times are set by your campus.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -292,6 +287,10 @@ private fun MoneyInSection(state: AppState, onRefresh: () -> Unit) {
     }
     val credits = remember(state.transactions) { state.transactions.filter { it.isCredit } }
     when {
+        state.transactionsFailure != null -> NoteCard(
+            title = "Could not load recent credits", body = state.transactionsFailure.headline(), tone = MasonTone.Error,
+            action = { TextButton(onClick = onRefresh) { Text("Try again") } },
+        )
         state.loadingTransactions && credits.isEmpty() -> Text(
             "Reading your transactions…",
             style = MaterialTheme.typography.bodyMedium,
@@ -299,9 +298,8 @@ private fun MoneyInSection(state: AppState, onRefresh: () -> Unit) {
         )
 
         credits.isEmpty() && !state.loadingTransactions -> EmptyState(
-            title = "No money in yet",
-            body = "The server has not reported any credit to this account. Once a campus " +
-                "top-up lands, it appears here as a Transfer Funds row.",
+            title = "No recent credits",
+            body = "No credits appear in the latest transactions loaded here. Refresh after adding funds to check for a new entry.",
             icon = Icons.Filled.Savings,
         )
 

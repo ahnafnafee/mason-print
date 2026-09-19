@@ -36,8 +36,10 @@ class SecureStore(context: Context) : CookieSnapshotStore {
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
         )
     }.getOrElse {
-        MpLog.warn(tag, "Encrypted prefs unavailable, falling back to private prefs", it)
-        context.getSharedPreferences(FILE_NAME + "_plain", Context.MODE_PRIVATE)
+        MpLog.warn(tag, "Encrypted storage unavailable; session will not be saved", it)
+        context.getSharedPreferences(FILE_NAME + "_plain", Context.MODE_PRIVATE).also { fallback ->
+            fallback.edit().clear().apply()
+        }
     }
 
     /** False when the fallback above was taken; surfaced on the Diagnostics screen. */
@@ -72,15 +74,17 @@ class SecureStore(context: Context) : CookieSnapshotStore {
     }
 
     fun saveCredentials(creds: Credentials) {
+        if (!encryptedAtRest) return
         username = creds.username
         password = creds.password
         rememberMe = creds.rememberMe
     }
 
     override suspend fun load(): List<String> =
-        prefs.getStringSet(KEY_COOKIES, emptySet())?.toList().orEmpty()
+        if (encryptedAtRest) prefs.getStringSet(KEY_COOKIES, emptySet())?.toList().orEmpty() else emptyList()
 
     override suspend fun save(entries: List<String>) {
+        if (!encryptedAtRest) return
         prefs.edit().putStringSet(KEY_COOKIES, entries.toSet()).apply()
     }
 

@@ -63,6 +63,24 @@ class PrintRequestsTest {
 
     private val payload = FinishingPayload.from(FinishingOptions.DEFAULT)
 
+    @Test
+    fun `cost preserves each job and replaces old funding with the reviewed choice`() {
+        val first = job("loc/1", code = "OLD", copies = 1)
+        val second = job("loc/2", copies = 3).copy(
+            finishing = first.finishing!!.copy(mono = false, duplex = true, copies = 3),
+        )
+        val rows = jobsOf(PrintRequests.cost(listOf(first, second), "printer", null))
+        assertEquals("1", rows[0].getValue("FinishingOptions").jsonObject.getValue("Copies").jsonPrimitive.content)
+        assertEquals("3", rows[1].getValue("FinishingOptions").jsonObject.getValue("Copies").jsonPrimitive.content)
+        assertEquals("Yes", rows[0].getValue("FinishingOptions").jsonObject.getValue("Mono").jsonPrimitive.content)
+        assertEquals("No", rows[1].getValue("FinishingOptions").jsonObject.getValue("Mono").jsonPrimitive.content)
+        assertEquals("Yes", rows[1].getValue("FinishingOptions").jsonObject.getValue("Duplex").jsonPrimitive.content)
+        rows.forEach { assertEquals("", it.getValue("CostCenterCode").jsonPrimitive.content) }
+        jobsOf(PrintRequests.cost(listOf(first, second), "printer", "NEW")).forEach {
+            assertEquals("NEW", it.getValue("CostCenterCode").jsonPrimitive.content)
+        }
+    }
+
     // ------------------------------------------------------------------ release
 
     /**
@@ -108,6 +126,14 @@ class PrintRequestsTest {
         val j = jobsOf(PrintRequests.release(listOf(job("loc/1")), "dev/1", "")).single()
         assertFalse(j.containsKey("CostCenterCode"))
         assertFalse(j.containsKey("Owner"))
+    }
+
+    @Test
+    fun `selected funding applies to jobs with and without a saved code`() {
+        val selected = listOf(job("loc/pdf", code = "SAVED"), job("loc/photo"))
+        val rows = jobsOf(PrintRequests.release(selected, "printer", "", costCenterCode = "CHOSEN"))
+        assertEquals(2, rows.size)
+        rows.forEach { assertEquals("CHOSEN", it.getValue("CostCenterCode").jsonPrimitive.content) }
     }
 
     @Test

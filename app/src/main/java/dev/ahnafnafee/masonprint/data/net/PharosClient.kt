@@ -19,6 +19,7 @@ import dev.ahnafnafee.masonprint.data.model.obj
 import dev.ahnafnafee.masonprint.data.model.objects
 import dev.ahnafnafee.masonprint.data.model.objectsNested
 import dev.ahnafnafee.masonprint.data.model.strCI
+import dev.ahnafnafee.masonprint.data.model.strIn
 import dev.ahnafnafee.masonprint.data.model.toJsonObject
 import dev.ahnafnafee.masonprint.data.model.toJsonObjects
 import java.io.IOException
@@ -161,8 +162,9 @@ class PharosClient(
             is ApiResult.Ok -> {
                 captureUserUri(target, r)
                 val user = runCatching { PharosUser.from(r.body.orEmpty().toJsonObject()) }.getOrNull()
-                user?.let { captureFromUser(target, it) }
-                ApiResult.Ok(user ?: PharosUser.from(emptyJsonObject()), r.status, r.body)
+                    ?: return ApiResult.Err(PharosFailure.Server(PharosError.from(r.status, r.body.orEmpty())))
+                captureFromUser(target, user)
+                ApiResult.Ok(user, r.status, r.body)
             }
         }
     }
@@ -576,13 +578,13 @@ class PharosClient(
         }
         builder.method(method, body)
         val response = client.await(builder.build())
-        response.use {
+        withContext(Dispatchers.IO) { response.use {
             RawResponse(
                 status = it.code,
                 body = if (method == "HEAD") null else runCatching { it.body.string() }.getOrNull(),
                 headers = it.headers.map { (k, v) -> k to v },
             )
-        }
+        } }
     } catch (e: CancellationException) {
         throw e
     } catch (e: IOException) {
@@ -762,6 +764,14 @@ data class CostEstimate(
 ) {
     /** True when the server answered and refused every job it was asked about. */
     val allRefused: Boolean get() = refusals.isNotEmpty() && refusals.size >= lines.size
+
+    /** A total is usable only when the server priced every document in this exact selection. */
+    fun covers(locations: Set<String>): Boolean {
+        if (locations.isEmpty() || total == null || !total.isFinite() || total < 0 || refusals.isNotEmpty()) return false
+        if (lines.size != locations.size) return false
+        val returned = lines.mapNotNull { it.strIn("Location", "JobLocation") }
+        return returned.isEmpty() || (returned.size == lines.size && returned.toSet() == locations)
+    }
 
     companion object {
         fun from(body: String): CostEstimate {

@@ -83,6 +83,20 @@ object PrintRequests {
         )
     }.encode()
 
+    /** Price the actual selection without applying the first document's options to the rest. */
+    fun cost(jobs: List<PrintJob>, deviceLocation: String?, costCenterCode: String?): String =
+        buildJsonObject {
+            put("CostCenterCode", costCenterCode.orEmpty())
+            putStr("Device", deviceLocation)
+            put("PrintJobs", JsonArray(jobs.map { job ->
+                buildJsonObject {
+                    put("Location", job.location)
+                    put("CostCenterCode", costCenterCode.orEmpty())
+                    put("FinishingOptions", job.finishing?.let { FinishingPayload.from(it).forJobUpdate() } ?: emptyObject())
+                }
+            }))
+        }.encode()
+
     /**
      * `POST /printjobs/release` → `{PrintJobs, Device, CardId}`.
      *

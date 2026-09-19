@@ -409,6 +409,8 @@ data class PrintJob(
      */
     val submissionAgeSeconds: Double?,
     val applicationName: String?,
+    /** Per-document restrictions; an absent flag leaves the decision to the server. */
+    val supportedFinishing: SupportedFinishing = SupportedFinishing(),
 ) {
     val id: String get() = location
     val isReleased: Boolean get() = !pending
@@ -482,6 +484,7 @@ data class PrintJob(
                 originatingMachineName = o.strCI("OriginatingMachineName"),
                 submissionAgeSeconds = o.dblCI("SubmissionTimeDelta"),
                 applicationName = o.strCI("ApplicationName"),
+                supportedFinishing = SupportedFinishing.from(o.obj("SupportedFinishingOptions")),
             )
         }
 
@@ -499,6 +502,20 @@ data class PrintJob(
             val s = state?.trim()?.lowercase() ?: return true
             return s !in FINISHED_STATES
         }
+    }
+}
+
+data class SupportedFinishing(
+    val color: Boolean? = null,
+    val duplex: Boolean? = null,
+    val copies: Boolean? = null,
+) {
+    companion object {
+        fun from(o: JsonObject?) = SupportedFinishing(
+            color = o?.boolIn("Color", "Mono"),
+            duplex = o?.boolIn("Duplex"),
+            copies = o?.boolIn("Copies"),
+        )
     }
 }
 

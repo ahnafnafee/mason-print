@@ -2,6 +2,13 @@
 
 package dev.ahnafnafee.masonprint.ui
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -112,11 +119,12 @@ internal fun ConnectScreen(
     state: AppState,
     onConnect: (String) -> Unit,
     onOpenPrintCenter: () -> Unit,
+    canOpenPrintCenter: Boolean = false,
 ) {
     var host by rememberSaveable { mutableStateOf(state.host.ifBlank { BuildConfig.GMU_HOST }) }
 
     Column(
-        modifier = Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(24.dp),
+        modifier = Modifier.fillMaxSize().safeDrawingPadding().imePadding().verticalScroll(rememberScrollState()).padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Spacer(Modifier.height(24.dp))
@@ -146,7 +154,7 @@ internal fun ConnectScreen(
             Text("Mason Print", style = MaterialTheme.typography.headlineMedium)
         }
         Text(
-            "Campus print queue, without the browser inside the app.",
+            "Upload documents, choose a campus printer, and review the cost before printing.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -158,17 +166,18 @@ internal fun ConnectScreen(
             onValueChange = { host = it },
             label = { Text("Print server") },
             supportingText = {
-                Text("You can paste a full https:// URL or a /myprintcenter link. Both are reduced to the API address.")
+                Text("Enter your campus print server or paste its Print Center link.")
             },
             singleLine = true,
             shape = MaterialTheme.shapes.medium,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go, keyboardType = KeyboardType.Uri),
-            keyboardActions = KeyboardActions(onGo = { onConnect(host) }),
+            keyboardActions = KeyboardActions(onGo = { if (host.isNotBlank() && state.busy == null) onConnect(host) }),
             modifier = Modifier.fillMaxWidth(),
         )
 
         Button(
             onClick = { onConnect(host) },
+            enabled = host.isNotBlank() && state.busy == null,
             shape = MasonPillShape,
             modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
         ) {
@@ -185,6 +194,7 @@ internal fun ConnectScreen(
 
         FailureSummary(state.failure)
 
+        if (canOpenPrintCenter) {
         OutlinedButton(onClick = onOpenPrintCenter, modifier = Modifier.fillMaxWidth()) {
             Text("Sign in through the Print Center instead")
         }
@@ -193,6 +203,7 @@ internal fun ConnectScreen(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        }
     }
 }
 
@@ -211,6 +222,7 @@ internal fun CertPrompt(
     onTrust: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    BackHandler(onBack = onDismiss)
     val tls = failure as? PharosFailure.TlsNotTrusted
     Scaffold(
         topBar = {
@@ -272,6 +284,7 @@ internal fun CertPrompt(
 
             Button(
                 onClick = onTrust,
+                enabled = tls != null,
                 shape = MasonPillShape,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
             ) { Text("Trust this certificate") }
@@ -293,13 +306,14 @@ internal fun SignInScreen(
     canOpenPrintCenter: Boolean,
 ) {
     var user by rememberSaveable { mutableStateOf("") }
-    var pass by rememberSaveable { mutableStateOf("") }
+    var pass by remember { mutableStateOf("") }
     var rememberMe by rememberSaveable { mutableStateOf(true) }
     // Not rememberSaveable: a revealed password must not survive the app going to the background.
     var showPass by remember { mutableStateOf(false) }
+    LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) { showPass = false }
 
     Column(
-        modifier = Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(24.dp),
+        modifier = Modifier.fillMaxSize().safeDrawingPadding().imePadding().verticalScroll(rememberScrollState()).padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Spacer(Modifier.height(8.dp))
@@ -397,20 +411,20 @@ internal fun SignInScreen(
             },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done, keyboardType = KeyboardType.Password),
             keyboardActions = KeyboardActions(
-                onDone = { if (user.isNotBlank() && pass.isNotEmpty()) onSignIn(user, pass, rememberMe) },
+                onDone = { if (user.isNotBlank() && pass.isNotEmpty() && state.busy == null) onSignIn(user.trim(), pass, rememberMe) },
             ),
             modifier = Modifier.fillMaxWidth(),
         )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(checked = rememberMe, onCheckedChange = { rememberMe = it })
+        Row(Modifier.fillMaxWidth().toggleable(value = rememberMe, role = Role.Checkbox, onValueChange = { rememberMe = it }), verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(checked = rememberMe, onCheckedChange = null)
             Text("Keep me signed in", style = MaterialTheme.typography.bodyMedium)
         }
         Text(
             // Was: "sends KeepMeLoggedIn=yes, exactly like the vendor app". A student is not choosing
             // a query parameter, and has never seen the vendor app. What they are choosing is whether
             // to type the password again next week.
-            "Your password is kept in the phone's encrypted storage, so you are not asked for it every " +
-                "time the server signs you out.",
+            if (rememberMe) "Your password is saved in encrypted storage on this phone to restore your session."
+            else "Your password will not be saved. You will need to sign in again after restarting the app.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -441,7 +455,7 @@ internal fun SignInScreen(
                 modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
             ) {
                 ButtonGlyph(Icons.Filled.Language)
-                Text(if (single) "Sign in with Mason single sign-on" else "Use the web Print Center")
+                Text(if (single) "Sign in with Mason single sign-on" else "Use the web Print Center", textAlign = TextAlign.Center, modifier = Modifier.weight(1f))
             }
             Text(
                 if (single) {

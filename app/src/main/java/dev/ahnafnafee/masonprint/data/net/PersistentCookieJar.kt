@@ -1,118 +1,95 @@
 package dev.ahnafnafee.masonprint.data.net
 
-import java.io.IOException
-import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
-import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
-/**
- * Persistence seam for the cookie jar. Values are opaque strings (`"<url>\n<cookie>"`) so the
- * implementation can live behind EncryptedSharedPreferences without this layer knowing.
- */
+/** Encrypted persistence seam; each entry carries the cookie's origin and wire value. */
 interface CookieSnapshotStore {
     suspend fun load(): List<String>
     suspend fun save(entries: List<String>)
     suspend fun clear()
 }
 
-/**
- * A cookie jar that survives process death, because Pharos' session *is* its cookies.
- *
- * This is the fix for U3 in docs/FINDINGS.md: the stock app kept `X-PHAROS-USER-URI` and
- * `X-PHAROS-USER-TOKEN` in a memory-only `CookieCollection` (`UserAccountSettingManager`), while
- * the username/password sat in plaintext SharedPreferences. So it could "restore" a session by
- * re-sending credentials every launch — and if the server had rotated or revoked the token, the
- * user saw a generic error instead of a sign-in prompt.
- *
- * The cookies Pharos sets are `SameSite=Strict` and scoped to the API path, so the jar is keyed
- * by host+path exactly the way OkHttp's default in-memory jar does; the only difference is that
- * the snapshot is written through to storage and rehydrated at startup.
- */
-class PersistentCookieJar(private val store: CookieSnapshotStore) : CookieJar {
+/** RFC domain/path matching, with serialized persistence so sign-out cannot resurrect a snapshot. */
+class PersistentCookieJar(
+    private val store: CookieSnapshotStore,
+    private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
+) : CookieJar {
+    private val lock = Any()
+    private val cookies = linkedMapOf<Identity, Cookie>()
+    private val persistence = Mutex()
+    private var restored = false
 
-    private val jar = ConcurrentHashMap<String, MutableList<Cookie>>()
+    private data class Identity(val name: String, val domain: String, val path: String)
+    private fun Cookie.identity() = Identity(name, domain, path)
 
-    /** True once [restore] has run, so a save racing with startup cannot wipe the jar. */
-    @Volatile private var restored = false
-
-    suspend fun restore() {
-        if (restored) return
-        val entries = runCatching { store.load() }.getOrNull().orEmpty()
-        for (entry in entries) {
-            val nl = entry.indexOf('\n')
-            if (nl <= 0) continue
-            val url = runCatching { entry.substring(0, nl).toHttpUrl() }.getOrNull() ?: continue
-            val cookie = runCatching { Cookie.parse(url, entry.substring(nl + 1)) }.getOrNull() ?: continue
-            if (cookie.expiresAt < System.currentTimeMillis()) continue
-            jar.getOrPut(key(url, cookie)) { mutableListOf() }.add(cookie)
+    suspend fun restore() = persistence.withLock {
+        if (synchronized(lock) { restored }) return@withLock
+        val entries = try { store.load() } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            emptyList()
         }
-        restored = true
+        synchronized(lock) {
+            if (!restored) {
+                for (entry in entries) {
+                    val separator = entry.indexOf('\n')
+                    if (separator <= 0) continue
+                    val origin = entry.substring(0, separator).toHttpUrlOrNull() ?: continue
+                    val cookie = Cookie.parse(origin, entry.substring(separator + 1)) ?: continue
+                    if (cookie.expiresAt > System.currentTimeMillis()) {
+                        cookies.putIfAbsent(cookie.identity(), cookie)
+                    }
+                }
+                restored = true
+            }
+        }
     }
 
     override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
         if (cookies.isEmpty()) return
-        val now = System.currentTimeMillis()
-        val kept = cookies.filter { !it.persistent || it.expiresAt > now }
-        val hostList = jar.getOrPut(url.host) { mutableListOf() }
-        synchronized(hostList) {
-            hostList.removeAll { existing -> cookies.any { it.name == existing.name && it.path == existing.path } }
-            hostList += kept
-        }
-        snapshotAsync()
-    }
-
-    override fun loadForRequest(url: HttpUrl): List<Cookie> {
-        val now = System.currentTimeMillis()
-        val candidates = mutableListOf<Cookie>()
-        jar.forEach { (host, list) ->
-            if (host != url.host) return@forEach
-            synchronized(list) {
-                list.removeAll { it.expiresAt < now }
-                candidates += list.filter { it.matches(url) }
+        synchronized(lock) {
+            for (cookie in cookies) {
+                this.cookies.remove(cookie.identity())
+                if (cookie.expiresAt > System.currentTimeMillis()) this.cookies[cookie.identity()] = cookie
             }
         }
-        // Longest path first, which is what RFC 6265 §5.4 says browsers do and what Pharos'
-        // `/PharosAPI`-scoped cookies depend on when a broader cookie also exists.
-        return candidates.sortedByDescending { it.path.length }
+        scope.launch { persist() }
+    }
+
+    override fun loadForRequest(url: HttpUrl): List<Cookie> = synchronized(lock) {
+        cookies.values.removeAll { it.expiresAt <= System.currentTimeMillis() }
+        cookies.values.filter { it.matches(url) }.sortedByDescending { it.path.length }
     }
 
     suspend fun clearAll() {
-        jar.clear()
-        runCatching { store.clear() }
+        synchronized(lock) {
+            cookies.clear()
+            restored = true
+        }
+        persistence.withLock { store.clear() }
     }
 
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-
-    private fun snapshotAsync() {
-        val entries = mutableListOf<String>()
-        jar.forEach { (_, list) ->
-            synchronized(list) {
-                list.forEach { c ->
-                    val url = urlFor(c) ?: return@forEach
-                    entries += url.toString() + "\n" + c.toString()
-                }
+    // Read the current jar inside the persistence lock, never a snapshot queued before sign-out.
+    internal suspend fun persist() = persistence.withLock {
+        val entries = synchronized(lock) {
+            cookies.values.filter { it.expiresAt > System.currentTimeMillis() }.map { cookie ->
+                val origin = HttpUrl.Builder().scheme(if (cookie.secure) "https" else "http")
+                    .host(cookie.domain).encodedPath(cookie.path).build()
+                "$origin\n$cookie"
             }
         }
-        scope.launch { runCatching { store.save(entries) } }
+        try { store.save(entries) } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            // A failed disk write must not turn a valid live session into a crash.
+        }
     }
-
-    /**
-     * OkHttp's `Cookie.toString()` round-trips through `Cookie.parse` only if the supplied URL
-     * agrees with the cookie's domain/path, so the snapshot has to carry a URL that does.
-     */
-    private fun urlFor(cookie: Cookie): HttpUrl? = runCatching {
-        val host = if (cookie.hostOnly) cookie.domain else cookie.domain.removePrefix(".")
-        val scheme = if (cookie.secure) "https" else "http"
-        HttpUrl.Builder().scheme(scheme).host(host)
-            .addEncodedPathSegments(cookie.path.trimStart('/'))
-            .build()
-    }.getOrNull()
-
-    private fun key(url: HttpUrl, cookie: Cookie) = url.host
 }

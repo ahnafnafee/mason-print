@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.FlowRow
@@ -133,6 +134,7 @@ fun AccountScreen(
     }
 
     Scaffold(
+        modifier = Modifier.imePadding(),
         topBar = {
             TopAppBar(
                 navigationIcon = {
@@ -603,6 +605,15 @@ private fun LazyListScope.transactionHistory(
         }
     }
 
+    item(key = "txn-coverage") {
+        Text("Latest ${state.transactions.size} transactions loaded", style = MaterialTheme.typography.bodySmall)
+    }
+    state.transactionsFailure?.let { failure ->
+        item(key = "txn-failure") {
+            NoteCard(title = "Could not load recent transactions", body = failure.headline(), tone = MasonTone.Error,
+                action = { TextButton(onClick = onRetry) { Text("Try again") } })
+        }
+    }
     val q = query.trim()
     val rows = if (q.isEmpty()) state.transactions else state.transactions.filter { matchesTransaction(it, q) }
 
@@ -624,7 +635,7 @@ private fun LazyListScope.transactionHistory(
             }
         }
 
-        state.transactions.isEmpty() -> item(key = "txn-empty") {
+        state.transactions.isEmpty() && state.transactionsFailure == null -> item(key = "txn-empty") {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 EmptyState(
                     title = "No transactions yet",
@@ -904,7 +915,7 @@ private fun LogOffDialog(host: String, onDismiss: () -> Unit, onConfirm: () -> U
         onDismissRequest = onDismiss,
         icon = { Icon(Icons.AutoMirrored.Filled.ExitToApp, null) },
         title = { Text("Log off?") },
-        text = { Text(logOffNote(host) + " The session is revoked on the server, not just cleared from this phone.") },
+        text = { Text(logOffNote(host) + " Your saved password and browser session are also removed.") },
         confirmButton = {
             TextButton(onClick = onConfirm) {
                 Icon(Icons.AutoMirrored.Filled.ExitToApp, null, modifier = Modifier.size(18.dp))
@@ -918,7 +929,7 @@ private fun LogOffDialog(host: String, onDismiss: () -> Unit, onConfirm: () -> U
 
 /** §2.0.7 `logged_out`, with the host filled in from the live target rather than hard-coded. */
 internal fun logOffNote(host: String): String =
-    "Logging off revokes the session on $host and clears the cached queue and balance from this " +
+    "Logging off asks $host to end the session and clears the cached queue and balance from this " +
         "phone. Saved campuses and trusted certificates stay."
 
 /**

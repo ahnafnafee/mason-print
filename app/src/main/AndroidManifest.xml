@@ -45,6 +45,7 @@
             <!-- Share sheet: "Print this" from Files / Drive / Mail (fixes U6's browser round trip). -->
             <intent-filter android:label="@string/share_print_label">
                 <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="application/pdf" />
                 <data android:mimeType="application/msword" />

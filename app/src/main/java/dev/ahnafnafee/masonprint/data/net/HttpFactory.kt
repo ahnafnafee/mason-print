@@ -52,6 +52,7 @@ object HttpFactory {
         val base = OkHttpClient.Builder()
             .cookieJar(cookieJar)
             .sslSocketFactory(sslContext.socketFactory, platform)
+            .callTimeout(30, TimeUnit.SECONDS)
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
@@ -70,7 +71,13 @@ object HttpFactory {
                 )
             }
             .addNetworkInterceptor(Interceptor { chain ->
-                val response = chain.proceed(chain.request())
+                val original = chain.call().request().url
+                val current = chain.request().url
+                // OkHttp strips Authorization on redirects, but not Pharos' custom copy.
+                val sameOrigin = original.scheme == current.scheme && original.host == current.host && original.port == current.port
+                val request = if (sameOrigin) chain.request() else chain.request().newBuilder()
+                    .removeHeader("X-Authorization").removeHeader("Authorization").build()
+                val response = chain.proceed(request)
                 response.header("X-PHAROS-API-VERSION")?.let { onApiVersion(it) }
                 response
             })
@@ -109,16 +116,13 @@ object HttpFactory {
     )
 
     /**
-     * Keeps the header name and a six-character fingerprint — enough to tell "the credential was
-     * attached" from "it wasn't", which is the only distinction that ever matters in a bug report —
-     * and throws the value away.
+     * Retains the header name for diagnosis without exposing any part of a credential or token.
      */
     internal fun redact(line: String): String {
         val m = secretHeader.matchEntire(line) ?: return line
         val value = m.groupValues[2]
         val name = m.groupValues[1]
-        val fingerprint = value.takeWhile { !it.isWhitespace() && it != ';' }.take(6)
-        return if (fingerprint.isEmpty()) "$name: (empty)" else "$name: $fingerprint… (${value.length} B hidden)"
+        return if (value.isEmpty()) "$name: (empty)" else "$name: (redacted)"
     }
 
     /**

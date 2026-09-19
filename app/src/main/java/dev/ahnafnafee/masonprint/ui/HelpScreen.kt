@@ -44,9 +44,10 @@ private data class HelpEntry(val term: String, val meaning: String)
 private val HelpEntries = listOf(
     HelpEntry("Release", "Printing it, at the machine."),
     HelpEntry("Held", "Waiting on the server for you."),
-    HelpEntry("At release", "What it will cost when you print it."),
-    HelpEntry("Priced nowhere", "The server could not price it, so it will not print."),
-    HelpEntry("Charged to", "Whose money pays: yours, or a department's."),
+    HelpEntry("Estimate", "A preview of the cost. The server confirms the charge when you release."),
+    HelpEntry("Not priced", "A cost is not available. Choose a printer and review the job to check again."),
+    HelpEntry("Pay with", "The funding source used for every job you select: your balance or a cost center."),
+    HelpEntry("Fixed", "The server does not allow that setting to change for this document. Tap the label for details."),
     HelpEntry("Station code", "The four digits on the printer's own screen."),
 )
 
@@ -82,11 +83,11 @@ internal fun HelpScreen(onBack: () -> Unit) {
                     ) {
                         Text("Printing here takes three steps", style = MaterialTheme.typography.titleMedium)
                         Step(1, "Upload a document. It is sent to the print server, not to a printer.")
-                        Step(2, "It waits in the queue, marked Held, for about a week.")
+                        Step(2, "It waits in the queue. Check its print settings, preview, and expiry before releasing.")
                         Step(
                             3,
                             "Go to any campus printer and release it. Scan the sticker or type the " +
-                                "code on its panel. It prints, and only then are you charged.",
+                                "code on its panel, review your documents and the price, then confirm release.",
                         )
                     }
                 }

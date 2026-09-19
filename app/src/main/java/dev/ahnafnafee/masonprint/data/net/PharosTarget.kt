@@ -27,6 +27,9 @@ class PharosTarget private constructor(val root: HttpUrl) {
     /** Captured from a response header when the body did not carry `ServerVersion`. */
     @Volatile var headerApiVersion: String? = null
 
+    /** Keep the scheme and explicit port when restoring a configured server. */
+    val savedAddress: String get() = root.newBuilder().encodedPath("/").build().toString().trimEnd('/')
+
     val host: String get() = root.host
     val displayHost: String get() = if (root.port == HttpUrl.defaultPort(root.scheme)) root.host else "${root.host}:${root.port}"
 

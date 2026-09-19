@@ -29,6 +29,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -53,7 +56,6 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.QrCodeScanner
-import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Search
@@ -211,25 +213,22 @@ fun ReleaseScreen(
     session: Session,
     router: Router,
 ) {
-    Scaffold(topBar = { ReleaseTopBar("Release at a printer", onBack = { router.pop() }) }) { bar ->
+    Scaffold(modifier = Modifier.imePadding(), topBar = { ReleaseTopBar("Release at a printer", onBack = { router.pop() }) }) { bar ->
         var mode by rememberSaveable { mutableStateOf("printers") }
         var query by rememberSaveable { mutableStateOf("") }
         var pasted by rememberSaveable { mutableStateOf("") }
         var code by rememberSaveable { mutableStateOf("") }
         var notFound by rememberSaveable { mutableStateOf<String?>(null) }
 
-        // A deep link (`#/code=…`, MainActivity) or an "ask the server" token resolves in the
-        // background and *releases* as soon as it resolves — Session.resolveDeviceToken keeps the
-        // vendor's semantics, where a scan releases the oldest held job at that printer. When its
-        // outcome lands while this screen is up, the money question is already answered: go read it.
-        LaunchedEffect(state.outcome) {
-            if (state.outcome != null) router.replaceTop(Route.Result)
-        }
         // Cache-then-network. The cached list paints immediately (Session seeds it at boot) and this
         // refresh corrects it — picking up stations added since, and completing any cache written
         // before device paging fetched every page. Guarding on `isEmpty` would pin the first cache
         // forever, which is how a stale printer list outlives the printer.
-        LaunchedEffect(Unit) { session.loadDevices() }
+        LaunchedEffect(Unit) {
+            ReleaseHandoff.openedFromCode = false
+            session.loadDevices()
+        }
+        LaunchedEffect(code, pasted) { notFound = null }
 
         val cameraTab = state.capabilities?.qrReleaseEnabled ?: false
         val tabs = buildList {
@@ -241,7 +240,6 @@ fun ReleaseScreen(
 
         val pick: (Device) -> Unit = { device ->
             session.selectDevice(device)
-            ReleaseHandoff.openedFromCode = false
             router.push(Route.Confirm)
         }
         // The pickup both code paths share. `Device.matchesToken` accepts a bare Location, a
@@ -327,7 +325,7 @@ fun ReleaseScreen(
                     )
                 } else {
                     Text(
-                        "Releasing ${selected.size} ${jobWord(selected.size)} · ${state.fundingLabel}",
+                        "${selected.size} ${jobWord(selected.size)} selected · ${state.fundingLabel}",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -761,13 +759,14 @@ private fun TypeCodeTab(
                     "clear" -> OutlinedButton(
                         onClick = { onCode("") },
                         enabled = code.isNotEmpty(),
-                        modifier = Modifier.weight(1f).height(KeypadKeyHeight),
+                        modifier = Modifier.weight(1f).heightIn(min = KeypadKeyHeight),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                     ) { Text("Clear") }
 
                     "back" -> OutlinedButton(
                         onClick = { onCode(code.dropLast(1)) },
                         enabled = code.isNotEmpty(),
-                        modifier = Modifier.weight(1f).height(KeypadKeyHeight),
+                        modifier = Modifier.weight(1f).heightIn(min = KeypadKeyHeight),
                     ) { Icon(Icons.Filled.Backspace, contentDescription = "Delete last digit") }
 
                     // Spec §2.0.6: the key pad is a `FilledTonalButton` grid. A TextButton here
@@ -775,7 +774,8 @@ private fun TypeCodeTab(
                     else -> FilledTonalButton(
                         onClick = { if (code.length < 4) onCode(code + key) },
                         enabled = code.length < 4,
-                        modifier = Modifier.weight(1f).height(KeypadKeyHeight),
+                        modifier = Modifier.weight(1f).heightIn(min = KeypadKeyHeight),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                     ) {
                         Text(
                             key,
@@ -790,10 +790,10 @@ private fun TypeCodeTab(
     FilledTonalButton(
         onClick = onFind,
         enabled = code.length == 4,
-        modifier = Modifier.fillMaxWidth().height(56.dp),
-    ) { Text("Find this printer") }
+        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+    ) { Text("Find this printer", textAlign = TextAlign.Center) }
     TextButton(onClick = onList, modifier = Modifier.fillMaxWidth()) {
-        Text("Or pick the printer from the list")
+        Text("Or pick the printer from the list", textAlign = TextAlign.Center)
     }
 
     if (notFound != null) {
@@ -804,19 +804,36 @@ private fun TypeCodeTab(
 /** Inline instead of a snackbar: the reason must still be on screen while the user decides. */
 @Composable
 private fun NotFoundCodeCard(code: String, onAskServer: (String) -> Unit, onList: () -> Unit) {
-    NoteCard(
-        title = "No printer here carries the code $code",
-        body = "Check the digits on the panel screen, or pick the printer from the list. Asking the " +
-            "server releases the oldest held job at that printer as soon as the code resolves.",
-        icon = Icons.Filled.Help,
-        tone = MasonTone.Warn,
-        action = {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { onAskServer(code) }) { Text("Ask the server and release") }
-                TextButton(onClick = onList) { Text("Pick from the list") }
+    val (background, foreground) = MasonToneSurfaces(MasonTone.Warn)
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = background,
+        contentColor = foreground,
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Icon(Icons.Filled.Help, contentDescription = null, modifier = Modifier.size(24.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("No printer here carries the code $code", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Check the panel code, choose from the list, or ask the server to find it. You will review before release.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
             }
-        },
-    )
+            // Actions use the full card width and grow when their labels wrap at larger fonts.
+            Button(
+                onClick = { onAskServer(code) },
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            ) {
+                Text("Look up this code", textAlign = TextAlign.Center)
+            }
+            TextButton(onClick = onList, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                Text("Pick from the list", textAlign = TextAlign.Center)
+            }
+        }
+    }
 }
 
 /** Small combinator so "clear the error, then go" reads as one action at both call sites. */
@@ -838,8 +855,7 @@ fun ConfirmRelease(
     Scaffold(topBar = { ReleaseTopBar("Confirm release", onBack = { router.pop() }) }) { bar ->
         val reduced = rememberReducedMotion()
 
-        // The release may already be over — a background token resolve, or a release fired from
-        // here. An outcome always outranks this screen.
+        // A confirmed release may finish while this screen is still visible.
         LaunchedEffect(state.outcome) {
             if (state.outcome != null) router.replaceTop(Route.Result)
         }
@@ -847,8 +863,16 @@ fun ConfirmRelease(
         // The price is asked for, never computed here: POST /printjobs/cost answers per job, and a
         // local sum would disagree with the portal. CostPreview is not Saveable, so it is `remember`
         // — on rotation the ask simply runs again, which is what a price check should do anyway.
-        var preview by remember { mutableStateOf<CostPreview?>(null) }
-        LaunchedEffect(Unit) { session.previewCost(state.chosen) { preview = it } }
+        val selected = state.chosen
+        var preview by remember(selected, state.selectedDevice, state.costCenter) { mutableStateOf<CostPreview?>(null) }
+        var retryPrice by remember { mutableStateOf(0) }
+        LaunchedEffect(selected, state.selectedDevice, state.costCenter, retryPrice) {
+            preview = null
+            if (selected.isNotEmpty() && selected.all { it.pending } && state.selectedDevice != null) {
+                val request = session.previewCost(selected) { preview = it }
+                try { request?.join() } finally { request?.cancel() }
+            }
+        }
 
         Column(
             Modifier
@@ -865,8 +889,7 @@ fun ConfirmRelease(
                 EmptyState(
                     icon = Icons.Filled.Print,
                     title = "No printer chosen",
-                    body = "Pick the printer first. The price and the refusal behaviour are the " +
-                        "printer's server's answer, not this app's.",
+                    body = "Choose a printer to check the price for your selected documents.",
                 )
                 Button(
                     onClick = { if (router.canGoBack) router.pop() else router.replaceTop(Route.Release) },
@@ -886,6 +909,11 @@ fun ConfirmRelease(
                 }
                 Spacer(Modifier.height(MasonScrollSpacer))
                 return@Column
+            }
+
+            if (chosen.any { !it.pending }) {
+                NoteCard(title = "Some documents have already been released",
+                    body = "Return to the queue and select only documents that are waiting to release.", tone = MasonTone.Warn)
             }
 
             // --- The printer, with its model line: a service-desk call starts by reading this. ----
@@ -917,10 +945,8 @@ fun ConfirmRelease(
             }
 
             // --- Jobs this printer will take, and the ones it will be asked to leave behind. ------
-            SectionLabel("Jobs this printer will take")
-            val priced = chosen.filter { !it.costUnknown }
-            val leftBehind = chosen.filter { it.costUnknown }
-            priced.forEach { job ->
+            SectionLabel("Selected documents")
+            chosen.forEach { job ->
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = MaterialTheme.shapes.large,
@@ -937,48 +963,24 @@ fun ConfirmRelease(
                                 style = MaterialTheme.typography.bodyLarge,
                                 maxLines = 2,
                             )
-                            Row(
+                            FlowRow(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
                             ) {
                                 Text(
-                                    job.pageSummary,
+                                    specLine(job),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
-                                // A per-job cost centre is a server read off the queue, so it may be
-                                // stated — unlike one that was only just PATCHed (§7.1 #4).
-                                job.costCenterCode?.takeIf { it.isNotBlank() }?.let { cc ->
-                                    FactChip(Icons.Filled.ReceiptLong, cc, tone = MasonTone.Grant)
-                                }
                             }
                         }
-                        MoneyText(releaseMoney(state, job.cost))
+                        Text("Queue: ${releaseMoney(state, job.cost)}", style = MaterialTheme.typography.labelMedium)
                     }
                 }
             }
 
-            AnimatedVisibility(
-                visible = leftBehind.isNotEmpty(),
-                enter = fadeIn(if (reduced) snap() else tween(180)) +
-                    expandVertically(if (reduced) snap() else tween(180)),
-                exit = fadeOut(if (reduced) snap() else tween(120)) +
-                    shrinkVertically(if (reduced) snap() else tween(120)),
-            ) {
-                val names = leftBehind.joinToString(", ") { it.name ?: "A job" }
-                NoteCard(
-                    title = "${leftBehind.size} ${jobWord(leftBehind.size)} left behind",
-                    body = (preview?.reason?.let { "“$it” " } ?: "") +
-                        "$names has no price the server will accept. It stays in the queue rather " +
-                        "than sending you to a printer that would refuse it. Ask the service desk " +
-                        "to price it for your account.",
-                    icon = Icons.Filled.Warning,
-                    tone = MasonTone.Warn,
-                )
-            }
-
             // --- The money, in the server's words. ------------------------------------------------
-            SectionLabel("The money")
+            SectionLabel("Estimated total")
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = MaterialTheme.shapes.large,
@@ -999,9 +1001,7 @@ fun ConfirmRelease(
                             }
 
                             pv.failed -> Text(
-                                "The server would not price this right now" +
-                                    (pv.reason?.let { ": $it" } ?: "") +
-                                    ". The printer's answer at release is the one that counts.",
+                                "Could not check the price. Try again before releasing.",
                                 style = MaterialTheme.typography.bodyMedium,
                             )
 
@@ -1013,22 +1013,16 @@ fun ConfirmRelease(
                         }
                     }
                     MasonHairline()
-                    MoneyLine(
-                        "Charged to my balance",
-                        releaseMoney(state, priced.filter { it.costCenterCode.isNullOrBlank() }.sumOf { it.cost ?: 0.0 }),
+                    Text("Pay with: ${state.fundingLabel}", style = MaterialTheme.typography.bodyMedium)
+                    Text("Applies to all ${chosen.size} selected ${jobWord(chosen.size)}.", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        "The server confirms the charge when you release. Check the result for each document.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    val grant = priced.filter { !it.costCenterCode.isNullOrBlank() }.sumOf { it.cost ?: 0.0 }
-                    if (grant > 0.0) {
-                        MoneyLine("Charged to a grant (not your money)", releaseMoney(state, grant))
-                    }
-                    state.costCenter?.takeIf { it.isNotBlank() }?.let { cc ->
-                        Text(
-                            "This release asks the server to charge $cc. A cost centre only counts " +
-                                "when the server re-prices the job. The result screen quotes the " +
-                                "balance the server actually reported.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                    if (preview?.failed == true || preview?.blocked == true) {
+                        preview?.reason?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+                        TextButton(onClick = { retryPrice++ }) { Text("Check price again") }
                     }
                 }
             }
@@ -1039,8 +1033,7 @@ fun ConfirmRelease(
             if (balance != null && balance.contains('-')) {
                 NoteCard(
                     title = "Your balance is already $balance",
-                    body = "GMU does not block release for insufficient funds, so this may push " +
-                        "your balance further below zero.",
+                    body = "Releasing may lower this balance further. The server decides whether the selected funding source can pay.",
                     icon = Icons.Filled.Payments,
                     tone = MasonTone.Warn,
                 )
@@ -1052,8 +1045,8 @@ fun ConfirmRelease(
             val busy = state.busy
             Button(
                 onClick = { session.releaseSelected(state.chosen) },
-                enabled = busy == null && preview?.blocked != true,
-                modifier = Modifier.fillMaxWidth().height(56.dp),
+                enabled = busy == null && !state.releasing && chosen.all { it.pending } && preview?.let { !it.failed && !it.blocked } == true,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
             ) {
                 if (busy != null) {
                     CircularProgressIndicator(
@@ -1063,7 +1056,7 @@ fun ConfirmRelease(
                     Spacer(Modifier.width(10.dp))
                     Text(busy)
                 } else {
-                    Text("Release ${chosen.size} ${jobWord(chosen.size)} at ${device.label}")
+                    Text("Release ${chosen.size} ${jobWord(chosen.size)} at ${device.label}", textAlign = TextAlign.Center)
                 }
             }
             Text(
@@ -1075,8 +1068,7 @@ fun ConfirmRelease(
             )
             if (preview?.blocked == true) {
                 Text(
-                    "The server will not release a job it cannot price. Leave the unpriced job " +
-                        "behind and release the rest, or ask the service desk to price it.",
+                    "A price is not available for every selected document. Retry, or return to the queue to change your selection.",
                     style = MaterialTheme.typography.bodySmall,
                     color = currentMasonColors.warn,
                     modifier = Modifier.fillMaxWidth(),
@@ -1260,7 +1252,7 @@ fun ReleaseResult(
 
             Button(
                 onClick = acknowledge,
-                modifier = Modifier.fillMaxWidth().height(56.dp),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
             ) { Text("Back to the queue") }
             OutlinedButton(
                 onClick = {

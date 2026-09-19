@@ -1,6 +1,8 @@
-@file:OptIn(ExperimentalGetImage::class)
+@file:OptIn( androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 
 package dev.ahnafnafee.masonprint.ui
+
+import kotlinx.coroutines.withTimeoutOrNull
 
 import android.Manifest
 import android.content.Context
@@ -23,8 +25,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -62,6 +66,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -108,6 +113,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
  *   once per instance; the preview stays up and offers "Scan again" so a mis-targeted sticker is
  *   recoverable without leaving the screen.
  */
+@androidx.annotation.OptIn(markerClass = [ExperimentalGetImage::class])
 @Composable
 internal fun PrinterCodeScanner(
     onScan: (String) -> Unit,
@@ -162,16 +168,21 @@ internal fun PrinterCodeScanner(
         }
     }
 
-    LaunchedEffect(Unit) {
-        if (provider != null) return@LaunchedEffect
+    var cameraAttempt by remember { mutableStateOf(0) }
+    LaunchedEffect(cameraAttempt) {
+        cameraFailed = false
         val future = ProcessCameraProvider.getInstance(context)
-        suspendCancellableCoroutine<Unit> { cont ->
-            future.addListener({ if (cont.isActive) cont.resume(Unit) }, ContextCompat.getMainExecutor(context))
-        }
-        provider = runCatching { future.get() }.getOrNull()
+        val ready = withTimeoutOrNull(12_000) {
+            suspendCancellableCoroutine<Unit> { cont ->
+                future.addListener({ if (cont.isActive) cont.resume(Unit) }, ContextCompat.getMainExecutor(context))
+            }
+            true
+        } == true
+        provider = if (ready) runCatching { future.get() }.getOrNull() else null
+        cameraFailed = provider == null
     }
 
-    val scanner = remember {
+    val scanner = remember(cameraAttempt) {
         runCatching {
             BarcodeScanning.getClient(
                 // QR only. A station sticker is a QR, and taking every symbology is how a phone in a
@@ -191,7 +202,7 @@ internal fun PrinterCodeScanner(
         }
     }
 
-    LaunchedEffect(provider, permission, previewView, scanner) {
+    LaunchedEffect(provider, permission, previewView, scanner, cameraAttempt) {
         val bound = provider ?: return@LaunchedEffect
         if (permission != Permission.Granted) return@LaunchedEffect
         if (scanner == null) {
@@ -243,7 +254,11 @@ internal fun PrinterCodeScanner(
                         }
                     }
                 }
-                .addOnFailureListener { /* a frame that will not decode is normal, not an error */ }
+                .addOnFailureListener { error ->
+                    MpLog.warn("scanner", "code reader unavailable", error)
+                    decoderFailed = true
+                    analysis.clearAnalyzer()
+                }
                 .addOnCompleteListener { proxy.close() }
         }
         val opened = runCatching {
@@ -263,7 +278,7 @@ internal fun PrinterCodeScanner(
     }
 
     Surface(
-        modifier = modifier.fillMaxWidth().height(ViewfinderHeight),
+        modifier = modifier.fillMaxWidth().aspectRatio(1f),
         shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
     ) {
@@ -277,13 +292,17 @@ internal fun PrinterCodeScanner(
                     onSettings = { context.openAppSettings() },
                 )
 
-                provider == null || cameraFailed || decoderFailed -> ScannerWaiting(
-                    when {
-                        decoderFailed -> "The code reader could not start here. Use the printer list below."
-                        cameraFailed -> "No usable camera here. Use the printer list below."
-                        else -> "Waking the camera"
-                    },
-                )
+                cameraFailed || decoderFailed -> Column(
+                    Modifier.align(Alignment.Center).padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(if (decoderFailed) "The code reader is unavailable. Try again or choose a printer from the list."
+                        else "The camera could not start. Try again or choose a printer from the list.",
+                        textAlign = TextAlign.Center)
+                    TextButton(onClick = { cameraAttempt++ }) { Text("Try camera again") }
+                }
+
+                provider == null -> ScannerWaiting("Waking the camera")
 
                 else -> AndroidView(
                     factory = { previewView },
@@ -322,8 +341,6 @@ internal fun PrinterCodeScanner(
         }
     }
 }
-
-private val ViewfinderHeight = 220.dp
 
 /** How often one mis-targeted sticker is allowed to be reported, given the frame rate. */
 private const val MisfireIntervalMs = 1500L
@@ -397,7 +414,12 @@ private fun ScannerDenied(onRetry: () -> Unit, onSettings: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // FlowRow so "Allow the camera" and "App settings" wrap instead of crushing each other on
+        // a card too narrow to hold both — same fix as the not-found card on the release screen.
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
             FilledTonalButton(onClick = onRetry) { Text("Allow the camera") }
             TextButton(onClick = onSettings) {
                 Icon(Icons.Filled.Settings, null, Modifier.size(18.dp))

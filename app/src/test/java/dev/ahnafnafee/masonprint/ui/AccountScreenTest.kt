@@ -246,9 +246,9 @@ class AccountScreenTest {
     // ---------------------------------------------------------------------- log off, name
 
     @Test
-    fun `log off names the host it revokes the session on`() {
+    fun `log off names the host and describes local cleanup`() {
         assertEquals(
-            "Logging off revokes the session on mobileprint.gmu.edu and clears the cached queue " +
+            "Logging off asks mobileprint.gmu.edu to end the session and clears the cached queue " +
                 "and balance from this phone. Saved campuses and trusted certificates stay.",
             logOffNote("mobileprint.gmu.edu"),
         )

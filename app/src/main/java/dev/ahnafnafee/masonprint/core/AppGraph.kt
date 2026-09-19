@@ -78,7 +78,7 @@ class AppGraph(val app: Application) {
 
     fun useTarget(target: PharosTarget) {
         this.target = target
-        prefs.host = target.host
+        prefs.host = target.savedAddress
     }
 
     /** Rebuild everything that caches per-host state after the server changes. */

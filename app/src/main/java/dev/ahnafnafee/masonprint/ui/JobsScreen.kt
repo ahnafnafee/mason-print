@@ -6,6 +6,8 @@
 
 package dev.ahnafnafee.masonprint.ui
 
+import dev.ahnafnafee.masonprint.core.FinishingEdits
+
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FiniteAnimationSpec
@@ -21,6 +23,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -53,6 +56,11 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Tonality
+import androidx.compose.material.icons.filled.FlipToFront
+import androidx.compose.material.icons.filled.ViewModule
 import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.PrintDisabled
 import androidx.compose.material.icons.filled.Savings
@@ -91,7 +99,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -110,6 +121,7 @@ import dev.ahnafnafee.masonprint.data.model.PrintJob
 import dev.ahnafnafee.masonprint.ui.theme.MasonType
 import dev.ahnafnafee.masonprint.ui.theme.MasonPillShape
 import dev.ahnafnafee.masonprint.ui.theme.SelectedCardCorner
+import dev.ahnafnafee.masonprint.ui.theme.currentMasonColors
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
@@ -171,12 +183,8 @@ fun JobsScreen(
      *
      * Selection is deliberately *not* cleared here: the release flow reads `state.chosen`.
      */
-    val estimate = { session.previewCost(chosen) { preview -> costPreview = preview } }
-    val release = {
-        session.previewCost(chosen) { preview ->
-            if (preview.blocked || preview.reason != null) costPreview = preview else router.push(Route.Release)
-        }
-    }
+    val estimate: () -> Unit = { session.previewCost(chosen) { preview -> costPreview = preview } }
+    val release: () -> Unit = { router.push(Route.Release) }
 
     QueueScaffold(
         state = state,
@@ -325,6 +333,7 @@ fun JobsScreen(
             // turns it off the controls are visible but inert, with the reason said out loud,
             // rather than the dialog pretending the settings do not exist.
             canEdit = state.capabilities?.finishingUpdateAllowed != false,
+            saving = state.updatingFinishing,
             onDismiss = { copiesOpen = false },
             onApply = { options ->
                 copiesOpen = false
@@ -577,6 +586,13 @@ private fun StripBody(
                         )
                     }
                 }
+                if (variant == FundingVariant.Department) {
+                    Text(
+                        "For every job you select",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = content,
+                    )
+                }
             }
             if (variant == FundingVariant.Arrears) {
                 // The one variant that cannot be released gets the only explicit button: a chevron
@@ -609,19 +625,23 @@ private fun ListHeader(
     onClear: () -> Unit,
 ) {
     Column {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                if (showReleased) "All jobs" else "Waiting to release",
-                style = MaterialTheme.typography.titleMedium,
-            )
-            // The densest bit of vendor jargon on the screen, explained where it is read rather than
-            // in a glossary the student has to go and find.
-            InfoTip(
-                term = "Waiting to release",
-                meaning = "These are on the server, not printed yet. Take one to any campus printer " +
-                    "and release it there. That is when it prints and when you pay.",
-            )
-            Spacer(Modifier.weight(1f))
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            itemVerticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (showReleased) "All jobs" else "Waiting to release",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                InfoTip(
+                    term = "Waiting to release",
+                    meaning = "These are on the server, not printed yet. Take one to any campus printer " +
+                        "and release it there. That is when it prints and when you pay.",
+                )
+            }
             if (visible.isNotEmpty()) {
                 if (state.selection.isNotEmpty()) {
                     TextButton(onClick = onClear) { Text("Clear") }
@@ -672,19 +692,7 @@ private fun statusOf(job: PrintJob): JobStatusSpec = when {
     else -> JobStatusSpec(MasonJobStatus.Held, MasonJobStatus.HeldIcon, MasonTone.Neutral)
 }
 
-/**
- * One held document.
- *
- * The whole row is the control: `Modifier.selectable(role = Role.Checkbox)` on the card, so the tap
- * target is 100 % of the object rather than the 20 dp square on its left. The tick over the avatar is
- * drawn as well, because a row whose only change is a fill is a row whose state disappears in a
- * greyscale screenshot.
- *
- * Selection grows the corner from 20 dp ([JobCardRadius]) to 26 dp ([SelectedCardRadius], the radius
- * inside [SelectedCardCorner]) and repaints to `secondaryContainer`. Charcoal, not green: green in this
- * design means an outcome that already happened, and a job you have merely selected has not happened
- * yet.
- */
+/** A selectable document, its print options, and a separate preview action. */
 @Composable
 private fun JobRow(
     job: PrintJob,
@@ -703,178 +711,194 @@ private fun JobRow(
         label = "jobCardCorner",
     )
     val status = statusOf(job)
+    val settings = queuePrintSettings(job)
+    var restriction by remember(job.id) { mutableStateOf<QueuePrintSetting?>(null) }
 
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .selectable(
-                selected = checked,
-                // A released job has nothing to select it *for*: every bulk action in this API takes
-                // queue locations, and acting on a released one is how a refusal is born.
-                enabled = job.pending,
-                role = Role.Checkbox,
-                onClick = { onToggle(!checked) },
-            ),
+        modifier = Modifier.fillMaxWidth().selectable(
+            selected = checked,
+            enabled = job.pending,
+            role = Role.Checkbox,
+            onClick = { onToggle(!checked) },
+        ),
         shape = RoundedCornerShape(radius),
         colors = CardDefaults.cardColors(
-            containerColor = if (checked) {
-                MaterialTheme.colorScheme.secondaryContainer
-            } else {
-                MaterialTheme.colorScheme.surfaceContainerLow
-            },
-            contentColor = if (checked) {
-                MaterialTheme.colorScheme.onSecondaryContainer
-            } else {
-                MaterialTheme.colorScheme.onSurface
-            },
+            containerColor = if (checked) MaterialTheme.colorScheme.secondaryContainer
+                else MaterialTheme.colorScheme.surfaceContainerLow,
+            contentColor = if (checked) MaterialTheme.colorScheme.onSecondaryContainer
+                else MaterialTheme.colorScheme.onSurface,
         ),
         border = if (checked) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
-        Column(Modifier.padding(start = 12.dp, end = 14.dp, top = 12.dp, bottom = 12.dp)) {
-            /*
-             * Centred, not top-aligned. The trailing preview control is an `IconButton`, whose 24 dp
-             * glyph sits in the middle of a 48 dp touch target it cannot give up without dropping
-             * below the minimum. Top-aligning the row therefore lines up the checkbox and the price
-             * with the title while leaving that one glyph a dozen dp lower, which reads as a
-             * mistake. Centring is also what `ListItem` does with its own leading and trailing slots.
-             */
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                /*
-                 * An always-visible checkbox. The card was already selectable, but it showed nothing
-                 * to say so until *after* it had been selected — and a queue that cannot be released
-                 * without a selection has to make the selection obvious before it is made.
-                 *
-                 * The whole card is still the tap target; this is the signifier, not the control, so
-                 * it takes no click of its own and is silent to TalkBack — the card already announces
-                 * itself as a checkbox. Disabled on a released job, which cannot be selected at all.
-                 *
-                 * Losing the avatar loses no status: the chip below carries it as icon *and* word.
-                 */
-                Checkbox(
-                    checked = checked,
-                    onCheckedChange = null,
-                    enabled = job.pending,
-                    modifier = Modifier.clearAndSetSemantics {},
-                )
-                Column(Modifier.weight(1f)) {
+        BoxWithConstraints(Modifier.padding(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 4.dp)) {
+            val stackPrice = maxWidth < 280.dp * LocalDensity.current.fontScale
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Checkbox(
+                        checked = checked,
+                        onCheckedChange = null,
+                        enabled = job.pending,
+                        modifier = Modifier.clearAndSetSemantics {},
+                    )
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text(
+                            job.name ?: "Untitled document",
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        val summary = queuePageCount(job) ?: when {
+                            job.isProcessing -> "Preparing document"
+                            job.analysisFailed -> "Page count unavailable"
+                            else -> null
+                        }
+                        summary?.let {
+                            Text(it, style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    if (!stackPrice) JobPrice(job, state)
+                }
+                if (stackPrice) JobPrice(job, state, inline = true)
+
+                if (settings.isNotEmpty()) {
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        itemVerticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        settings.forEach { setting ->
+                            QueueSettingChip(setting, onExplain = { restriction = setting })
+                        }
+                    }
+                }
+
+                if (status.label != MasonJobStatus.Held || job.needsPassword) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (status.label != MasonJobStatus.Held) StatusChip(status.icon, status.label, status.tone)
+                        if (job.needsPassword) FactChip(Icons.Filled.VisibilityOff, "Needs its password", tone = MasonTone.Warn)
+                    }
+                }
+                // Pending jobs use the shared Pay with choice; a saved code is historical metadata.
+                if (job.isReleased) job.costCenterCode?.takeIf { it.isNotBlank() }?.let {
+                    Text("Cost center: $it", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     Text(
-                        job.name ?: "Untitled document",
-                        style = MaterialTheme.typography.titleMedium,
+                        timingLine(job),
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    Spacer(Modifier.height(2.dp))
-                    val spec = specLine(job)
-                    when {
-                        spec.isNotBlank() -> Text(
-                            spec,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-
-                        job.isProcessing -> Text(
-                            "The server is still counting this document.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-
-                        job.analysisFailed -> Text(
-                            "The server could not count this document. It is still yours to release.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-
-                        /**
-                         * The document is on the server and the server has not told us anything about
-                         * it yet — no `Activity`, no price. This is the state a job is in for the few
-                         * seconds after `POST printjobs` returns 201, and saying so is what stops it
-                         * reading as a failed upload. [dev.ahnafnafee.masonprint.core.Session.watchAnalysis]
-                         * re-reads the queue while this line is up.
-                         */
-                        stillAwaitsCosting(job) -> Text(
-                            "The server has the document and has not priced it yet. The queue checks again by itself.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                    TextButton(
+                        onClick = onPreview,
+                        modifier = Modifier.semantics { contentDescription = "Preview ${job.name ?: "this document"}" },
+                    ) {
+                        Icon(Icons.Filled.Visibility, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Preview")
                     }
                 }
-                Column(horizontalAlignment = Alignment.End) {
-                    /*
-                     * `-1` is not a price. GMU answers `-1` for a document it has not finished costing,
-                     * and `MoneyText` renders null as an em dash, so the honest rendering of "no cost
-                     * exists" is the one the server's own format string would mangle into `$-1.00`.
-                     */
-                    MoneyText(if (job.costUnknown) "—" else moneyOf(state, job.cost))
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        when {
-                            job.costUnknown && stillAwaitsCosting(job) -> "costing…"
-                            job.costUnknown -> "priced nowhere"
-                            (job.cost ?: 0.0) == 0.0 && !job.costCenterCode.isNullOrBlank() -> "department pays"
-                            else -> "at release"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.End,
-                        maxLines = 2,
-                    )
-                }
-                /*
-                 * Its own button, not the card: tapping the card selects, which is what the release
-                 * flow needs, so "let me look at it first" has to be a separate target rather than a
-                 * second meaning for the same tap.
-                 */
-                IconButton(onClick = onPreview) {
-                    Icon(
-                        Icons.Filled.Visibility,
-                        contentDescription = "Preview ${job.name ?: "this document"}",
-                    )
-                }
             }
+        }
+    }
+    restriction?.let { setting ->
+        AlertDialog(
+            onDismissRequest = { restriction = null },
+            icon = { Icon(Icons.Filled.Lock, null, tint = currentMasonColors.warn) },
+            title = { Text("Setting fixed by the server") },
+            text = {
+                Text("The print server does not allow changes to ${setting.restriction} for this document. " +
+                    "This setting stays unchanged when you edit the selected jobs.")
+            },
+            confirmButton = { TextButton(onClick = { restriction = null }) { Text("Got it") } },
+        )
+    }
+}
 
-            Spacer(Modifier.height(10.dp))
-            /*
-             * One status chip, plus the two facts that change what the row means (a cost centre, a
-             * password). Finishing used to be four more chips here; it is one quiet line under the
-             * title instead ([specLine]), because the row's job is "which document, what state" —
-             * not a second copy of the Copies dialog.
-             */
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                StatusChip(status.icon, status.label, status.tone)
-                job.costCenterCode?.takeIf { it.isNotBlank() }?.let {
-                    FactChip(Icons.Filled.BusinessCenter, it, tone = MasonTone.Grant)
-                }
-                if (job.needsPassword) {
-                    FactChip(Icons.Filled.VisibilityOff, "Needs its password", tone = MasonTone.Warn)
-                }
-            }
+@Composable
+private fun QueueSettingChip(setting: QueuePrintSetting, onExplain: () -> Unit) {
+    val locked = setting.restriction != null
+    val colours = currentMasonColors
+    val (background, foreground) = when {
+        locked -> colours.warnContainer to colours.onWarnContainer
+        setting.kind == QueueSettingKind.Colour -> colours.colourPrintContainer to colours.onColourPrintContainer
+        else -> MaterialTheme.colorScheme.surfaceContainerHigh to MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val icon = if (locked) Icons.Filled.Lock else when (setting.kind) {
+        QueueSettingKind.Colour -> Icons.Filled.Palette
+        QueueSettingKind.Mono -> Icons.Filled.Tonality
+        QueueSettingKind.Sides -> Icons.Filled.FlipToFront
+        QueueSettingKind.Copies -> Icons.Filled.ContentCopy
+        QueueSettingKind.Layout -> Icons.Filled.ViewModule
+    }
+    val label = setting.label + if (locked) " · fixed" else ""
+    val content: @Composable () -> Unit = {
+        Row(
+            Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(icon, null, modifier = Modifier.size(16.dp))
+            Text(label, style = MaterialTheme.typography.labelMedium)
+        }
+    }
+    if (locked) {
+        Surface(
+            onClick = onExplain,
+            shape = MaterialTheme.shapes.small,
+            color = background,
+            contentColor = foreground,
+            modifier = Modifier.semantics { contentDescription = "${setting.label}, fixed by the server. Show details" },
+            content = content,
+        )
+    } else {
+        Surface(shape = MaterialTheme.shapes.small, color = background, contentColor = foreground, content = content)
+    }
+}
 
-            Spacer(Modifier.height(8.dp))
-            Text(
-                timingLine(job),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-
+@Composable
+private fun JobPrice(job: PrintJob, state: AppState, inline: Boolean = false) {
+    val amount = if (job.costUnknown) "—" else moneyOf(state, job.cost)
+    val label = when {
+        job.costUnknown && stillAwaitsCosting(job) -> "calculating"
+        job.costUnknown -> "not priced"
+        job.isReleased -> "reported"
+        else -> "estimate"
+    }
+    if (inline) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
+            MoneyText(amount)
+            Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    } else {
+        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            MoneyText(amount)
+            Text(label, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.End, maxLines = 2)
         }
     }
 }
+
 
 /**
  * The one quiet line of facts under a job's title: the page summary plus the finishing the server
  * recorded, `·`-joined. Finishing only appears when it says something beyond the default, so a
  * plain 1-copy simplex B&W job keeps its one-line reading.
  */
-private fun specLine(job: PrintJob): String {
+internal fun specLine(job: PrintJob): String {
     val finishing = job.finishing?.let { fin ->
         // Colour is deliberately omitted here: job.pageSummary already carries it ("2 b&w"), so
         // repeating fin.colourLabel put "Black & white" on the line twice.
@@ -1096,38 +1120,35 @@ private fun EstimateDialog(
  * old value on the card rather than as a lie in a form. This dialog claims only that the change was
  * asked for.
  *
- * Fields start from the selection where it agrees and from the server's default where it does not,
- * so editing several jobs at once cannot silently flatten a setting the user never looked at.
+ * Mixed fields stay unchanged until explicitly edited. The draft is keyed by selection identity
+ * so a queue refresh cannot discard choices while this dialog is open.
  */
 @Composable
 private fun CopiesDialog(
     jobs: List<PrintJob>,
     canEdit: Boolean,
+    saving: Boolean,
     onDismiss: () -> Unit,
-    onApply: (FinishingOptions) -> Unit,
+    onApply: (FinishingEdits) -> Unit,
 ) {
-    val seed = remember(jobs) {
-        val all = jobs.mapNotNull { it.finishing }
-        fun <T> agreed(pick: (FinishingOptions) -> T): T? = all.map(pick).distinct().singleOrNull()
-        FinishingOptions(
-            mono = agreed { it.mono } ?: true,
-            duplex = agreed { it.duplex } ?: false,
-            pagesPerSide = agreed { it.pagesPerSide } ?: 1L,
-            copies = agreed { it.copies } ?: 1L,
-            defaultPageSize = agreed { it.defaultPageSize } ?: "Letter",
-            pageRange = agreed { it.pageRange } ?: "",
-        )
+    var edits by remember(jobs.map { it.location }.toSet()) { mutableStateOf(FinishingEdits()) }
+    fun <T> agreed(pick: (FinishingOptions) -> T): T? =
+        jobs.map { it.finishing?.let(pick) }.distinct().singleOrNull()
+    val copies = edits.copies ?: agreed { it.copies }
+    val duplex = edits.duplex ?: agreed { it.duplex }
+    val mono = edits.mono ?: agreed { it.mono }
+    val restrictions = jobs.mapNotNull { job ->
+        edits.unsupportedFor(job).takeIf { it.isNotEmpty() }?.let {
+            "${job.name ?: "Document"}: ${it.joinToString(" and ")} will stay unchanged."
+        }
     }
-    var copies by remember(seed) { mutableStateOf(seed.copies ?: 1L) }
-    var duplex by remember(seed) { mutableStateOf(seed.duplex ?: false) }
-    var mono by remember(seed) { mutableStateOf(seed.mono ?: true) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = { Icon(Icons.Filled.ContentCopy, null) },
         title = { Text("Copies and finishing") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 if (jobs.isEmpty()) {
                     Text("Select at least one job first.", style = MaterialTheme.typography.bodyMedium)
                 } else {
@@ -1143,18 +1164,18 @@ private fun CopiesDialog(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("Copies", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
                         OutlinedButton(
-                            onClick = { if (copies > 1L) copies -= 1L },
-                            enabled = canEdit && copies > 1L,
+                            onClick = { edits = edits.copy(copies = ((copies ?: 2L) - 1L).coerceAtLeast(1L)) },
+                            enabled = canEdit && !saving && (copies == null || copies > 1L),
                         ) { Text("-", maxLines = 1) }
                         Text(
-                            copies.toString(),
-                            Modifier.width(48.dp),
+                            copies?.toString() ?: "Mixed",
+                            Modifier.width(64.dp),
                             textAlign = TextAlign.Center,
                             style = MaterialTheme.typography.titleMedium,
                         )
                         OutlinedButton(
-                            onClick = { if (copies < 99L) copies += 1L },
-                            enabled = canEdit && copies < 99L,
+                            onClick = { edits = edits.copy(copies = ((copies ?: 0L) + 1L).coerceAtMost(99L)) },
+                            enabled = canEdit && !saving && (copies == null || copies < 99L),
                         ) { Text("+", maxLines = 1) }
                     }
 
@@ -1162,20 +1183,30 @@ private fun CopiesDialog(
                         label = "Sides",
                         options = listOf("One-sided" to false, "Two-sided" to true),
                         selected = duplex,
-                        enabled = canEdit,
-                        onSelect = { duplex = it },
+                        enabled = canEdit && !saving,
+                        onSelect = { edits = edits.copy(duplex = it) },
                     )
                     ChoiceRow(
                         label = "Colour",
                         options = listOf("Black & white" to true, "Colour" to false),
                         selected = mono,
-                        enabled = canEdit,
-                        onSelect = { mono = it },
+                        enabled = canEdit && !saving,
+                        onSelect = { edits = edits.copy(mono = it) },
                     )
 
+                    if (restrictions.isNotEmpty()) {
+                        Text(
+                            "The server limits these settings:\n" + restrictions.joinToString("\n"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     Text(
-                        if (canEdit) {
-                            "The server reprices the job, so the cost can change. Nothing is charged " +
+                        if (saving) {
+                            "Saving the previous changes. Wait for the queue to update before editing again."
+                        } else if (canEdit) {
+                            "Only settings you change are applied to each document. The server reprices " +
+                                "the jobs, so the cost can change. Nothing is charged " +
                                 "until you release at a printer."
                         } else {
                             "This server does not accept finishing changes after upload."
@@ -1188,8 +1219,8 @@ private fun CopiesDialog(
         },
         confirmButton = {
             Button(
-                onClick = { onApply(seed.copy(copies = copies, duplex = duplex, mono = mono)) },
-                enabled = canEdit && jobs.isNotEmpty(),
+                onClick = { onApply(edits) },
+                enabled = canEdit && !saving && jobs.isNotEmpty() && edits != FinishingEdits(),
             ) { Text("Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
@@ -1201,18 +1232,18 @@ private fun CopiesDialog(
 private fun <T> ChoiceRow(
     label: String,
     options: List<Pair<String, T>>,
-    selected: T,
+    selected: T?,
     enabled: Boolean,
     onSelect: (T) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(label, style = MaterialTheme.typography.bodyMedium)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(if (selected == null) "$label · Mixed" else label, style = MaterialTheme.typography.bodyMedium)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             options.forEach { (text, value) ->
                 if (value == selected) {
-                    Button(onClick = { onSelect(value) }, enabled = enabled) { Text(text, maxLines = 1) }
+                    Button(onClick = { onSelect(value) }, enabled = enabled) { Text(text, textAlign = TextAlign.Center) }
                 } else {
-                    OutlinedButton(onClick = { onSelect(value) }, enabled = enabled) { Text(text, maxLines = 1) }
+                    OutlinedButton(onClick = { onSelect(value) }, enabled = enabled) { Text(text, textAlign = TextAlign.Center) }
                 }
             }
         }

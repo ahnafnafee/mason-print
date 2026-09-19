@@ -21,7 +21,6 @@ import dev.ahnafnafee.masonprint.data.model.obj
 import dev.ahnafnafee.masonprint.data.model.encode
 import dev.ahnafnafee.masonprint.data.model.toJsonObject
 import dev.ahnafnafee.masonprint.data.model.CostCenter
-import dev.ahnafnafee.masonprint.data.model.FinishingOptions
 import kotlinx.serialization.builtins.ListSerializer
 import dev.ahnafnafee.masonprint.data.net.ApiResult
 import dev.ahnafnafee.masonprint.data.net.Credentials
@@ -35,6 +34,13 @@ import dev.ahnafnafee.masonprint.data.upload.MimeTypes
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.job
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -85,6 +91,9 @@ data class AppState(
      */
     val savedCostCenters: List<SavedCostCenter> = emptyList(),
     val busy: String? = null,
+    val updatingFinishing: Boolean = false,
+    val releasing: Boolean = false,
+    val codeResolved: Boolean = false,
     val upload: UploadProgress? = null,
     val uploadFraction: Float = 0f,
     /**
@@ -133,10 +142,11 @@ data class AppState(
     /** Statement rows from `GET {UserUri}/transactions`, loaded on demand by the Account screen. */
     val transactions: List<Transaction> = emptyList(),
     val loadingTransactions: Boolean = false,
+    val transactionsFailure: PharosFailure? = null,
     /** Per-job outcome of the release that just happened, for the Result screen. */
     val outcome: ReleaseOutcome? = null,
 ) {
-    val signedIn: Boolean get() = user != null
+    val signedIn: Boolean get() = phase == Phase.Ready && user != null
 
     /** `2 of 4` while a multi-file send is in flight, null for a single file or when idle. */
     val uploadPosition: String? get() = batchPosition(uploadIndex, uploadFiles.size)
@@ -254,7 +264,8 @@ data class CostPreview(
  */
 class Session(private val graph: AppGraph) {
 
-    private val scope = CoroutineScope(Dispatchers.Main.immediate)
+    private var scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val previewDownloads = Mutex()
 
     private val _state = MutableStateFlow(
         AppState(
@@ -319,6 +330,7 @@ class Session(private val graph: AppGraph) {
                     return@launch
                 }
             graph.useTarget(target)
+            _state.update { it.copy(host = target.displayHost) }
             /*
              * The offline snapshot goes on screen before anything is asked of the network: a cold
              * start with no signal then shows the held jobs and the cached balance with their age
@@ -327,7 +339,7 @@ class Session(private val graph: AppGraph) {
              * produces, never a modal (Spec §2.0.7 `offline_stale`).
              */
             val restored = graph.snapshot.loadAsync()
-            if (restored != null && restored.snapshot.host == target.displayHost) {
+            if (creds != null && restored != null && restored.snapshot.host == target.displayHost) {
                 settings = restored.snapshot.settingsBody?.let {
                     runCatching { SettingsDocument(it.toJsonObject()) }.getOrNull()
                 }
@@ -361,6 +373,7 @@ class Session(private val graph: AppGraph) {
      * questions the stock app only answered after a failed login.
      */
     fun connect(input: String) {
+        if (_state.value.busy != null) return
         val target = PharosTarget.parse(input.trim())
         _state.update {
             it.copy(
@@ -395,6 +408,7 @@ class Session(private val graph: AppGraph) {
     // ------------------------------------------------------------------ sign in
 
     fun signIn(username: String, password: String, remember: Boolean) {
+        if (_state.value.busy != null || username.isBlank() || password.isBlank()) return
         // A tap on "Sign in" must never be a silent no-op. If nothing installed a target yet — a
         // host restored from prefs, or a deep link that skipped Connect — derive one from the host
         // shown on screen instead of returning without a request or a message.
@@ -407,7 +421,7 @@ class Session(private val graph: AppGraph) {
             _state.update { it.copy(phase = Phase.Connect) }
             return
         }
-        signIn(target, Credentials(username, password, remember), announce = true)
+        signIn(target, Credentials(username.trim(), password, remember), announce = true)
     }
 
     private fun signIn(target: PharosTarget, creds: Credentials, announce: Boolean) {
@@ -416,7 +430,6 @@ class Session(private val graph: AppGraph) {
             graph.api.credentials = creds
             when (val result = graph.api.logon(target, creds)) {
                 is ApiResult.Err -> {
-                    graph.api.credentials = null
                     /*
                      * A silent restore that failed because the network is gone is not a sign-out:
                      * the cookie may still be perfectly alive. With a cached queue on screen the
@@ -430,6 +443,7 @@ class Session(private val graph: AppGraph) {
                         _state.update { it.copy(phase = Phase.Ready, busy = null, failure = null, stale = true) }
                         return@launch
                     }
+                    graph.api.credentials = null
                     _state.update {
                         it.copy(
                             // Both the explicit "sign in" tap and a failed silent restore land on
@@ -466,7 +480,7 @@ class Session(private val graph: AppGraph) {
                 }
 
                 is ApiResult.Ok -> {
-                    if (creds.rememberMe) graph.secrets.saveCredentials(creds)
+                    if (creds.rememberMe) graph.secrets.saveCredentials(creds) else graph.secrets.forgetCredentialOnly()
                     graph.prefs.lastUserName = creds.username
                     val doc = settings ?: graph.api.settings(target).getOrNull()
                     settings = doc
@@ -482,6 +496,10 @@ class Session(private val graph: AppGraph) {
                         it.copy(
                             phase = Phase.Ready,
                             user = result.value,
+                            jobs = if (it.user?.accountKey == account) it.jobs else emptyList(),
+                            selection = if (it.user?.accountKey == account) it.selection else emptySet(),
+                            transactions = if (it.user?.accountKey == account) it.transactions else emptyList(),
+                            outcome = null,
                             costCenter = remembered,
                             favouriteDevices = graph.prefs.favouriteDevicesFor(account),
                             recentDevices = graph.prefs.recentDevicesFor(account),
@@ -490,7 +508,9 @@ class Session(private val graph: AppGraph) {
                             capabilities = doc?.capabilities(graph.api.apiVersion, result.value),
                             busy = null,
                             failure = null,
-                            notice = if (announce) null else "Signed in as ${result.value.preferredName.ifBlank { creds.username }}",
+                            notice = if (creds.rememberMe && !graph.secrets.encryptedAtRest)
+                                "Signed in for this session. Secure storage is unavailable, so your password was not saved."
+                            else if (announce) null else "Signed in as ${result.value.preferredName.ifBlank { creds.username }}",
                         )
                     }
                     refresh(jobsFirst = true)
@@ -506,12 +526,15 @@ class Session(private val graph: AppGraph) {
      */
     fun refresh(jobsFirst: Boolean = false) {
         val target = graph.target ?: return
+        if (_state.value.busy != null || !_state.value.signedIn) return
         // A deliberate look at the queue takes over from the background one. The two must not race
         // for the same page, and this path starts the next background look itself when it lands.
         analysisWatcher?.cancel()
         scope.launch {
             _state.update { it.copy(busy = "Refreshing") }
-            val jobs = graph.api.printJobs(target, skip = 0)
+            // An offline cold start has no user route yet. Restore it before asking for jobs.
+            val restoredUser = if (target.userUri == null) graph.api.refreshUser(target, includeBalance = true) else null
+            val jobs = readLoadedQueue(target)
             when (jobs) {
                 is ApiResult.Ok -> applyJobsPage(jobs.value)
 
@@ -530,7 +553,7 @@ class Session(private val graph: AppGraph) {
                     )
                 }
             }
-            val user = graph.api.refreshUser(target, includeBalance = true)
+            val user = restoredUser ?: graph.api.refreshUser(target, includeBalance = true)
             val doc = settings
             _state.update {
                 it.copy(
@@ -571,11 +594,35 @@ class Session(private val graph: AppGraph) {
      * look that waits for a document to be priced. Both must produce exactly the same state, or a
      * queue would change character depending on who asked for it.
      */
+    private suspend fun readLoadedQueue(target: PharosTarget): ApiResult<Page<PrintJob>> {
+        val first = graph.api.printJobs(target, skip = 0)
+        if (first !is ApiResult.Ok) return first
+        var page = first.value
+        val jobs = page.items.associateBy { it.location }.toMutableMap()
+        val wanted = _state.value.jobs.size
+        val visited = mutableSetOf<String>()
+        while (jobs.size < wanted && page.hasMoreAfter(jobs.size)) {
+            val next = page.absoluteNextPage ?: break
+            if (!visited.add(next)) break
+            when (val result = graph.api.nextPage(target, page)) {
+                is ApiResult.Err -> return result
+                is ApiResult.Ok -> {
+                    page = result.value
+                    val before = jobs.size
+                    jobs.putAll(page.items.associateBy { it.location })
+                    if (jobs.size == before) { page = page.copy(nextPageLink = null); break }
+                }
+            }
+        }
+        return first.copy(value = page.copy(items = jobs.values.toList(), count = first.value.count))
+    }
+
     private fun applyJobsPage(page: Page<PrintJob>) {
         savedJobsPage = page
         _state.update {
             it.copy(
-                jobs = page.items,
+                jobs = page.items.distinctBy { it.location },
+                selection = it.selection.intersect(page.items.map { job -> job.location }.toSet()),
                 jobsCount = page.count,
                 nextJobsPage = if (page.hasMoreAfter(page.items.size)) page else null,
                 loadedAt = System.currentTimeMillis(),
@@ -614,7 +661,7 @@ class Session(private val graph: AppGraph) {
                 // A manual refresh, an upload, or a release owns the screen: let it land. It calls
                 // applyJobsPage itself, which is what will start the next look.
                 if (_state.value.busy != null) continue
-                when (val jobs = graph.api.printJobs(target, skip = 0)) {
+                when (val jobs = readLoadedQueue(target)) {
                     is ApiResult.Ok -> applyJobsPage(jobs.value)
                     // Quiet on purpose: a background look that fails must not trade a readable
                     // queue for an error screen. The queue marks itself stale and says so.
@@ -627,17 +674,18 @@ class Session(private val graph: AppGraph) {
 
     fun loadMoreJobs() {
         val target = graph.target ?: return
-        val page = savedJobsPage?.takeIf { it.hasMore } ?: return
+        if (_state.value.busy != null || _state.value.nextJobsPage == null) return
+        val page = savedJobsPage?.takeIf { it.hasMoreAfter(_state.value.jobs.size) } ?: return
         scope.launch {
             _state.update { it.copy(busy = "Loading more jobs") }
             val more = graph.api.nextPage(target, page)
             if (more is ApiResult.Ok) {
                 savedJobsPage = more.value
-                val merged = _state.value.jobs + more.value.items
+                val merged = (_state.value.jobs + more.value.items).distinctBy { it.location }
                 _state.update {
                     it.copy(
                         jobs = merged,
-                        nextJobsPage = if (more.value.hasMoreAfter(merged.size)) more.value else null,
+                        nextJobsPage = if (merged.size > it.jobs.size && more.value.hasMoreAfter(merged.size)) more.value else null,
                         jobsCount = more.value.count ?: it.jobsCount,
                         busy = null,
                     )
@@ -679,7 +727,7 @@ class Session(private val graph: AppGraph) {
      */
     fun uploadAll(sources: List<UploadSource>) {
         val target = graph.target ?: return
-        if (sources.isEmpty()) return
+        if (sources.isEmpty() || _state.value.upload != null || !_state.value.signedIn) return
         val caps = _state.value.capabilities
         val limit = caps?.maxUploadBytes ?: settings?.maxUploadBytes
 
@@ -729,9 +777,9 @@ class Session(private val graph: AppGraph) {
                         upload = progress,
                         uploadFraction = 0f,
                         uploadFiles = files,
-                        uploadIndex = position + 1,
+                        uploadIndex = sources.indexOf(source) + 1,
                         // A refusal about file 2 of 4 must not still be on screen while file 3 goes up.
-                        uploadNotSent = emptyList(),
+                        uploadNotSent = plan.overLimit.map { source -> source.fileName } + refused,
                         uploadFailedFile = null,
                         busy = sendingLabel(source.fileName, position + 1, sending.size),
                         failure = null,
@@ -780,7 +828,7 @@ class Session(private val graph: AppGraph) {
                     // Only name a file for the failure card when exactly one file failed; with two
                     // the card would quote the last refusal while pretending it covered both.
                     uploadFailedFile = failedFile.takeIf { f -> refused.size == 1 },
-                    busy = if (refused.isEmpty()) "Refreshing queue" else null,
+                    busy = null,
                     failure = if (refused.isEmpty()) null else lastFailure,
                     notice = summary,
                 )
@@ -792,6 +840,7 @@ class Session(private val graph: AppGraph) {
     // ------------------------------------------------------------------ devices & release
 
     fun loadDevices() {
+        if (_state.value.busy != null) return
         val target = graph.target ?: return
         scope.launch {
             _state.update { it.copy(busy = "Finding printers") }
@@ -818,7 +867,9 @@ class Session(private val graph: AppGraph) {
 
                     is ApiResult.Ok -> {
                         val page = result.value
-                        all += page.items
+                        val before = all.size
+                        all += page.items.filter { device -> all.none { it.location == device.location } }
+                        if (all.size == before) break
                         if (page.items.isEmpty() || !page.hasMoreAfter(all.size) || all.size >= cap) break
                     }
                 }
@@ -838,36 +889,46 @@ class Session(private val graph: AppGraph) {
      * a queued document is always re-downloadable. Returns null and publishes the failure, so the
      * screen renders the same error wording as everything else.
      */
-    suspend fun documentFor(job: PrintJob): java.io.File? {
-        val target = graph.target ?: return null
+    suspend fun documentFor(job: PrintJob): java.io.File? = previewDownloads.withLock {
+        val target = graph.target ?: return@withLock null
+        val identity = "${target.root}|${_state.value.user?.accountKey}|${job.location}"
+        val key = java.security.MessageDigest.getInstance("SHA-256").digest(identity.toByteArray())
+            .joinToString("") { "%02x".format(it) }
         val dir = java.io.File(graph.app.cacheDir, "preview").apply { mkdirs() }
-        val dest = java.io.File(dir, "${job.location.hashCode()}.pdf")
-        if (dest.exists() && dest.length() > 0L) return dest
-        return when (val result = graph.api.jobContent(target, job.location, dest)) {
-            is ApiResult.Ok -> result.value
-            is ApiResult.Err -> {
-                runCatching { dest.delete() }
-                _state.update { it.copy(failure = result.failure) }
-                null
+        val dest = java.io.File(dir, "$key.pdf")
+        if (dest.exists() && dest.length() > 0L) return@withLock dest
+        val partial = java.io.File.createTempFile("download-", ".part", dir)
+        try {
+            when (val result = graph.api.jobContent(target, job.location, partial)) {
+                is ApiResult.Ok -> withContext(Dispatchers.IO) {
+                    if (partial.length() > 0 && partial.renameTo(dest)) dest else null
+                }
+                is ApiResult.Err -> {
+                    _state.update { it.copy(failure = result.failure) }
+                    null
+                }
             }
+        } finally {
+            partial.delete()
         }
     }
 
-    /** A scanned/pasted QR payload resolves to a device before it can release anything. */
+    /** Resolving a code only chooses a printer. Release always requires the review screen. */
     fun resolveDeviceToken(token: String) {
         val target = graph.target ?: return
+        if (_state.value.busy != null || !_state.value.signedIn) return
         scope.launch {
-            _state.update { it.copy(busy = "Reading printer code") }
+            _state.update { it.copy(busy = "Reading printer code", codeResolved = false) }
             when (val result = graph.api.deviceById(target, token)) {
-                is ApiResult.Ok -> {
-                    _state.update { it.copy(selectedDevice = result.value, busy = null, notice = "Release at ${result.value.label}") }
-                    releaseSelected(listOfNotNull(_state.value.jobs.firstOrNull { it.pending }))
+                is ApiResult.Ok -> _state.update {
+                    it.copy(selectedDevice = result.value, busy = null, codeResolved = true, failure = null)
                 }
-
                 is ApiResult.Err -> _state.update { it.copy(busy = null, failure = result.failure) }
             }
         }
     }
+
+    fun consumeResolvedCode() = _state.update { it.copy(codeResolved = false) }
 
     fun selectDevice(device: Device?) = _state.update { it.copy(selectedDevice = device) }
 
@@ -965,25 +1026,6 @@ class Session(private val graph: AppGraph) {
      * screen says what the release was *asked* to charge, never "Charged to X".
      */
     /**
-     * What this release will actually be billed to, for the receipt.
-     *
-     * Not the same as [AppState.fundingLabel], which reports the *session's* choice. When the user
-     * has not overridden anything, the release sends no funding key and the server bills whatever
-     * the job itself carries, so a job uploaded against a department is charged to that department
-     * while the session still says "my own balance". Reading the jobs is the only way the receipt
-     * can name the account the money came from. Mixed selections say so rather than picking one.
-     */
-    private fun fundingIntentFor(jobs: List<PrintJob>, chosen: String?): String {
-        chosen?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
-        val stored = jobs.mapNotNull { it.costCenterCode?.trim()?.takeIf { code -> code.isNotEmpty() } }.distinct()
-        return when (stored.size) {
-            0 -> "My own balance"
-            1 -> stored.single()
-            else -> "${stored.size} department accounts"
-        }
-    }
-
-    /**
      * Star or unstar a printer for the signed-in account.
      *
      * Local, and deliberately so: Pharos has no notion of a favourite, and inventing a server field
@@ -1004,13 +1046,13 @@ class Session(private val graph: AppGraph) {
         val target = graph.target ?: return
         val device = _state.value.selectedDevice
         val costCenter = _state.value.costCenter
-        if (jobs.isEmpty()) return
+        if (jobs.isEmpty() || jobs.any { !it.pending } || device == null || _state.value.busy != null || _state.value.releasing) return
         val names = jobs.associate { it.location to (it.name ?: it.location.substringAfterLast('/')) }
         val before = _state.value.balanceText
-        val intent = fundingIntentFor(jobs, costCenter)
+        val intent = _state.value.fundingLabel
         val printer = device?.label ?: "the selected printer"
         scope.launch {
-            _state.update { it.copy(busy = "Releasing ${jobs.size} job(s)") }
+            _state.update { it.copy(busy = "Releasing ${jobs.size} job(s)", releasing = true) }
             val body = PrintRequests.release(jobs, device?.location, _state.value.user?.cardId, costCenterCode = costCenter)
             when (val result = graph.api.release(target, body)) {
                 is ApiResult.Err -> {
@@ -1018,6 +1060,7 @@ class Session(private val graph: AppGraph) {
                     _state.update {
                         it.copy(
                             busy = null,
+                            releasing = false,
                             outcome = ReleaseOutcome(
                                 printer = printer,
                                 fundingIntent = intent,
@@ -1061,6 +1104,7 @@ class Session(private val graph: AppGraph) {
                     _state.update {
                         it.copy(
                             busy = null,
+                            releasing = false,
                             user = op.updatedUser ?: it.user,
                             selection = emptySet(),
                             recentDevices = account?.let { a -> graph.prefs.recentDevicesFor(a) } ?: it.recentDevices,
@@ -1109,61 +1153,139 @@ class Session(private val graph: AppGraph) {
         val target = graph.target ?: return
         if (_state.value.loadingTransactions) return
         scope.launch {
-            _state.update { it.copy(loadingTransactions = true) }
+            _state.update { it.copy(loadingTransactions = true, transactionsFailure = null) }
             when (val result = graph.api.transactions(target, skip = 0, pageSize = 50)) {
                 is ApiResult.Ok -> _state.update {
                     it.copy(loadingTransactions = false, transactions = result.value.items)
                 }
 
                 is ApiResult.Err -> _state.update {
-                    it.copy(loadingTransactions = false, failure = result.failure)
+                    it.copy(loadingTransactions = false, transactionsFailure = result.failure)
                 }
             }
         }
     }
 
     /**
-     * `PATCH {UserUri}/printjobs/` — change copies, sides, colour, pages-per-side or page size on
-     * jobs already sitting in the queue.
-     *
-     * The server is the authority on whether this took. GMU answers 200 with a bare array of
-     * per-job rows and has been observed echoing a value back unchanged after accepting the write
-     * (docs/FINDINGS.md), so this reads the rows for refusals and then [refresh]es rather than
-     * assuming the request became the truth. The queue redraws from what the server now reports,
-     * which is why the dialog can be an editor at all: a change that silently did not stick shows
-     * up as the old value on the card a second later instead of as a lie in the UI.
+     * Apply only the edited, supported fields to each job, then verify the stored settings.
+     * A document can forbid colour changes while still accepting sides and copies.
      */
-    fun applyFinishing(jobs: List<PrintJob>, options: FinishingOptions) {
+    fun applyFinishing(jobs: List<PrintJob>, edits: FinishingEdits) {
         val target = graph.target ?: return
-        if (jobs.isEmpty()) return
+        if (jobs.isEmpty() || _state.value.updatingFinishing) return
+        val deviceLocation = _state.value.selectedDevice?.location
+        val costCenterCode = _state.value.costCenter
         scope.launch {
-            _state.update { it.copy(busy = "Updating ${jobs.size} job(s)") }
-            val body = PrintRequests.update(
-                jobs = jobs,
-                finishing = FinishingPayload.from(options),
-                deviceLocation = _state.value.selectedDevice?.location,
-                costCenterCode = _state.value.costCenter,
-            )
-            when (val result = graph.api.patchJobs(target, body)) {
-                is ApiResult.Err -> _state.update { it.copy(busy = null, failure = result.failure) }
-                is ApiResult.Ok -> {
-                    val op = result.value
-                    _state.update {
-                        it.copy(
-                            busy = null,
-                            notice = when {
-                                op.failures.isNotEmpty() ->
-                                    op.failures.firstNotNullOfOrNull { r ->
-                                        cleanSentence(r.strIn("UserMessage", "Message")?.htmlUnescaped())
-                                    } ?: "${op.failures.size} of ${jobs.size} job(s) were not changed."
-
-                                else -> "Asked the server to change ${jobs.size} job" +
-                                    "${if (jobs.size == 1) "" else "s"}. The queue shows what it stored."
-                            },
-                        )
+            _state.update { it.copy(busy = "Updating ${jobs.size} job(s)", updatingFinishing = true) }
+            try {
+                // Keep per-job writes and bounded verification retries. Unsupported fields are
+                // preserved before sending, so they cannot trigger an endless false mismatch.
+                val wantedByLocation = jobs.associate { it.location to edits.optionsFor(it) }
+                val restrictions = jobs.mapNotNull { job ->
+                    edits.unsupportedFor(job).takeIf { it.isNotEmpty() }?.let { fields ->
+                        "${job.name ?: "Document"}: ${fields.joinToString(" and ")} cannot be changed."
                     }
-                    refresh()
                 }
+                val refused = mutableMapOf<String, String>() // location -> the server's sentence
+                var remaining = jobs.filter { wantedByLocation.getValue(it.location) != FinishingPayload.from(it.finishing) }
+                var readFailure: PharosFailure? = null
+                pass@ for (pass in 0 until 3) {
+                    if (remaining.isEmpty()) break@pass
+                    for (job in remaining) {
+                        val body = PrintRequests.update(
+                            jobs = listOf(job),
+                            finishing = wantedByLocation.getValue(job.location),
+                            deviceLocation = deviceLocation,
+                            costCenterCode = costCenterCode,
+                        )
+                        when (val result = graph.api.patchJobs(target, body)) {
+                            is ApiResult.Err -> {
+                                _state.update { it.copy(busy = null, failure = result.failure) }
+                                return@launch
+                            }
+
+                            is ApiResult.Ok -> if (result.value.failures.isNotEmpty()) {
+                                refused[job.location] =
+                                    result.value.failures.firstNotNullOfOrNull { r ->
+                                        cleanSentence(r.strIn("UserMessage", "Message")?.htmlUnescaped())
+                                    } ?: (job.name ?: job.location)
+                            }
+                        }
+                        delay(350)
+                    }
+                    // What actually stuck? A fresh read of the queue, not the PATCH's own echo.
+                    when (val fresh = graph.api.printJobs(target, skip = 0)) {
+                        is ApiResult.Ok -> {
+                            val stored = fresh.value.items.associateBy { it.location }.toMutableMap()
+                            var page = fresh.value
+                            val visited = mutableSetOf<String>()
+                            while (remaining.any { it.location !in stored } && page.hasMoreAfter(stored.size)) {
+                                val next = page.absoluteNextPage ?: break
+                                if (!visited.add(next)) break
+                                when (val more = graph.api.nextPage(target, page)) {
+                                    is ApiResult.Err -> { readFailure = more.failure; break }
+                                    is ApiResult.Ok -> {
+                                        page = more.value
+                                        val before = stored.size
+                                        stored.putAll(page.items.associateBy { it.location })
+                                        if (stored.size == before) break
+                                    }
+                                }
+                            }
+                            // Publish the read-back before allowing another edit, keeping loaded
+                            // documents and selection beyond the first page intact.
+                            _state.update { state ->
+                                state.copy(
+                                    jobs = state.jobs.map { stored[it.location] ?: it },
+                                    jobsCount = fresh.value.count,
+                                    loadedAt = System.currentTimeMillis(),
+                                    stale = readFailure != null,
+                                )
+                            }
+                            remaining = remaining.filterNot { job -> refused.containsKey(job.location) }
+                                .filter { job ->
+                                    val fin = stored[job.location]?.finishing
+                                    val wanted = wantedByLocation.getValue(job.location)
+                                    // Null finishing is "not stored", not "stored as we asked".
+                                    fin == null ||
+                                        fin.mono != wanted.mono ||
+                                        fin.duplex != wanted.duplex ||
+                                        (fin.copies ?: 1L) != wanted.copies ||
+                                        (fin.pagesPerSide ?: 1L) != wanted.pagesPerSide
+                                }
+                            if (readFailure != null) break@pass
+                        }
+
+                        is ApiResult.Err -> {
+                            readFailure = fresh.failure
+                            break@pass
+                        }
+                    }
+                }
+                val unchanged = remaining.size
+                _state.update {
+                    it.copy(
+                        busy = null,
+                        failure = readFailure ?: it.failure,
+                        notice = (listOf(when {
+                            readFailure != null -> "Changes were sent, but could not be verified. Refresh the queue before releasing."
+
+                            refused.isNotEmpty() ->
+                                refused.values.distinct().joinToString(" · ") +
+                                    " — ${refused.size} of ${jobs.size} job" +
+                                    "${if (refused.size == 1) "" else "s"} refused."
+
+                            unchanged > 0 ->
+                                "$unchanged of ${jobs.size} job${if (unchanged == 1) "" else "s"} would not " +
+                                    "change — the server kept its own setting. Pull to refresh and check " +
+                                    "before you release."
+
+                            else -> "Saved the supported settings for ${jobs.size} job${if (jobs.size == 1) "" else "s"}."
+                        }) + restrictions).joinToString(" "),
+                    )
+                }
+            } finally {
+                _state.update { it.copy(busy = null, updatingFinishing = false) }
             }
         }
     }
@@ -1181,7 +1303,7 @@ class Session(private val graph: AppGraph) {
                     _state.update {
                         it.copy(
                             busy = null,
-                            selection = it.selection - jobs.map { j -> j.location }.toSet(),
+                            selection = it.selection - op.actedLocations.toSet(),
                             /**
                              * Counted from the per-job rows, not from `jobs.size`. This endpoint also
                              * answers 200 with a bare array, so a delete the server refused still
@@ -1213,16 +1335,16 @@ class Session(private val graph: AppGraph) {
      * will actually be charged. `cost` and `PATCH` share a body on this API (see [PrintRequests]),
      * so the preview and the change that follows cannot disagree.
      */
-    fun previewCost(jobs: List<PrintJob>, onResult: (CostPreview) -> Unit) {
-        val target = graph.target ?: return
+    fun previewCost(jobs: List<PrintJob>, onResult: (CostPreview) -> Unit): Job? {
+        val target = graph.target ?: return null
+        if (jobs.isEmpty()) return null
         val funding = _state.value.fundingLabel
-        val body = PrintRequests.update(
+        val body = PrintRequests.cost(
             jobs,
-            jobs.firstOrNull()?.finishing?.let { FinishingPayload.from(it) },
             _state.value.selectedDevice?.location,
             _state.value.costCenter,
         )
-        scope.launch {
+        return scope.launch {
             when (val result = graph.api.cost(target, body)) {
                 is ApiResult.Ok -> {
                     val formats = _state.value.capabilities?.formats
@@ -1277,7 +1399,7 @@ class Session(private val graph: AppGraph) {
                             },
                             fundingLabel = funding,
                             perJob = lines,
-                            blocked = (total != null && total < 0) || estimate.allRefused,
+                            blocked = !estimate.covers(jobs.map { it.location }.toSet()),
                             reason = refusal?.let {
                                 it.message ?: "This server would not price the selection (HTTP ${it.status})."
                             },
@@ -1299,20 +1421,23 @@ class Session(private val graph: AppGraph) {
 
     fun signOut() {
         val target = graph.target ?: return
-        analysisWatcher?.cancel()
+        if (_state.value.busy == "Signing out") return
+        val previous = scope
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        _state.update { it.copy(phase = Phase.Working, busy = "Signing out", user = null) }
         scope.launch {
-            // The stock app's "sign out" cleared its own prefs and left the server session alive
-            // (docs/FINDINGS.md §10 S4). Call the endpoint, then drop everything locally.
-            runCatching { graph.api.logout(target) }
+            // Await cancellation before clearing state: an old response must not restore an account.
+            previous.coroutineContext.job.cancelAndJoin()
+            withTimeoutOrNull(5_000) { graph.api.logout(target) }
             graph.forgetSession()
-            // Spec `logged_out`: say what actually happened, and say which of the user's things
-            // survived. Saved campuses and trusted certificates do; the cached queue and balance do
-            // not, because the state object below is a fresh one.
+            forgetWebSession()
+            settings = null
+            savedJobsPage = null
             _state.value = AppState(
                 phase = Phase.SignedOut,
                 host = target.displayHost,
                 apiVersion = graph.prefs.lastApiVersion,
-                notice = "Logged off. The session was revoked on ${target.displayHost}.",
+                notice = "Signed out. This phone's session and cached queue were cleared.",
             )
         }
     }
@@ -1337,7 +1462,11 @@ class Session(private val graph: AppGraph) {
 
     fun dismissFailure() = _state.update { it.copy(failure = null) }
 
-    fun dismissNotice() = _state.update { it.copy(notice = null) }
+    fun dismissNotice(expected: String? = _state.value.notice) = _state.update {
+        if (it.notice == expected) it.copy(notice = null, noticeAction = null) else it
+    }
+
+    fun notify(message: String) = _state.update { it.copy(notice = message, noticeAction = null) }
 
     /**
      * Address of the server-hosted Print Center, for the WebView escape hatch.
@@ -1350,8 +1479,10 @@ class Session(private val graph: AppGraph) {
     fun printCenterUrl(): String? {
         val target = graph.target ?: return null
         val base = settings?.printCenter?.str("Url") ?: settings?.printCenter?.str("url")
-            ?: "https://${target.host}/myprintcenter"
-        return "$base?NoHeaderMode=1&cachebuster=${System.nanoTime()}"
+            ?: "/myprintcenter"
+        return target.root.resolve(base)?.newBuilder()
+            ?.setQueryParameter("NoHeaderMode", "1")
+            ?.setQueryParameter("cachebuster", System.nanoTime().toString())?.build()?.toString()
     }
 
     /**
@@ -1368,7 +1499,16 @@ class Session(private val graph: AppGraph) {
     }
 
     /** Sign the user out of the SPA too, by dropping the jar the WebView was fed from. */
-    fun forgetWebSession() = Unit
+    private suspend fun forgetWebSession() {
+        val cookies = android.webkit.CookieManager.getInstance()
+        kotlinx.coroutines.suspendCancellableCoroutine<Unit> { continuation ->
+            cookies.removeAllCookies {
+                cookies.flush()
+                if (continuation.isActive) continuation.resumeWith(Result.success(Unit))
+            }
+        }
+        android.webkit.WebStorage.getInstance().deleteAllData()
+    }
 }
 
 /**
@@ -1401,4 +1541,3 @@ private const val AnalysisPollMs = 4_000L
  * already answered "no" to. The refresh arrow in the queue's top bar stays the unbounded option.
  */
 private const val AnalysisPollBudgetMs = 60_000L
-

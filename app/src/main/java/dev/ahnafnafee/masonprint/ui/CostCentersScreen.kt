@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -136,6 +137,7 @@ fun CostCentersScreen(
         filterCostCenters(merged, typed).isEmpty()
 
     Scaffold(
+        modifier = Modifier.imePadding(),
         topBar = {
             TopAppBar(
                 title = { Text("Charge to a cost center") },
@@ -172,8 +174,7 @@ fun CostCentersScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
-                "A cost center moves the charge from your balance to a department's grant. " +
-                    "The server decides whether a code is valid for you; Mason Print only asks.",
+                "A cost center asks a department account to cover your printing. The server checks the code and price before release.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -370,20 +371,14 @@ fun CostCentersScreen(
 
             SectionGap()
             NoteCard(
-                title = "Only the hyphen separates",
-                body = "On ${state.host} every other spelling of a code. A tilde, dot, slash, " +
-                    "space, or half a code. Is answered, verbatim: \u201CImproper data. (Cost " +
-                    "Center information is invalid because invalid separator used ).\u201D A job " +
-                    "whose costing fails that way is never priced, and an unpriced job cannot be " +
-                    "released. Codes are offered exactly as the server sent them.",
+                title = "Use the complete department code",
+                body = "Enter the code exactly as your department supplied it, including any hyphens. The server checks whether your account can use it when pricing the release.",
                 icon = Icons.Filled.Error,
                 tone = MasonTone.Warn,
             )
             NoteCard(
                 title = "This choice is a request, not a receipt",
-                body = "Even an accepted code comes back in the response as an empty field. Until " +
-                    "the job has actually been released and re-read, Mason Print only knows what " +
-                    "the job was asked to charge. Never who paid.",
+                body = "Review the funding source and estimated total before releasing. The result shows what the server confirmed.",
                 tone = MasonTone.Neutral,
             )
 

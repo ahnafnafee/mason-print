@@ -20,6 +20,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.unit.dp
@@ -70,8 +74,7 @@ fun AppRoot(
     LaunchedEffect(state.notice) {
         val text = state.notice ?: return@LaunchedEffect
         val action = state.noticeAction
-        val result = runCatching {
-            snackbar.showSnackbar(
+        val result = snackbar.showSnackbar(
                 message = text,
                 actionLabel = when (action) {
                     SnackAction.ViewQueue -> "View queue"
@@ -80,14 +83,13 @@ fun AppRoot(
                 },
                 duration = if (action == null) SnackbarDuration.Short else SnackbarDuration.Long,
             )
-        }.getOrNull()
-        session.dismissNotice()
+        session.dismissNotice(text)
         when {
             result == SnackbarResult.ActionPerformed && action == SnackAction.ViewQueue ->
                 router.reset(Route.Queue)
 
             result == SnackbarResult.ActionPerformed && action == SnackAction.RetryRelease ->
-                session.releaseSelected(state.chosen)
+                router.push(Route.Confirm)
         }
     }
 
@@ -115,12 +117,25 @@ fun AppRoot(
         }
     }
 
+    LaunchedEffect(state.codeResolved) {
+        if (state.codeResolved) {
+            ReleaseHandoff.openedFromCode = true
+            router.push(Route.Confirm)
+            session.consumeResolvedCode()
+        }
+    }
+
+    if (state.phase == Phase.Boot || state.busy == "Signing out") {
+        Waiting(state.busy ?: "Opening Mason Print")
+        return
+    }
+
     /*
      * The queue hosts the snackbar in its own Scaffold, where Material anchors it above the bottom
      * bar; everywhere else this Scaffold hosts it. Exactly one host is composed at a time, so a
      * notice never shows twice, and never again lands on top of the Release pill.
      */
-    Scaffold(snackbarHost = { if (router.current != Route.Queue) SnackbarHost(snackbar) }) { _ ->
+    Box(Modifier.fillMaxSize()) {
         when (val route = router.current) {
             Route.Campus -> ConnectScreen(
                 state = state,
@@ -129,6 +144,7 @@ fun AppRoot(
                     session.connect(host)
                 },
                 onOpenPrintCenter = { router.push(Route.MasonLogin) },
+                canOpenPrintCenter = session.printCenterUrl() != null,
             )
 
             Route.Certificate -> CertPrompt(
@@ -205,6 +221,9 @@ fun AppRoot(
             Route.CostCenters -> CostCentersScreen(state, session, router)
             Route.AddFunds -> AddFundsScreen(state, session, router)
         }
+        if (router.current != Route.Queue) {
+            SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).safeDrawingPadding().imePadding())
+        }
     }
 }
 
@@ -213,13 +232,12 @@ fun AppRoot(
 internal fun NotReady(what: String, onBack: () -> Unit) {
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
         Column(
-            Modifier.fillMaxSize().padding(24.dp),
+            Modifier.fillMaxSize().safeDrawingPadding().padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Text("Not built yet", style = MaterialTheme.typography.titleLarge)
+            Text("Print Center unavailable", style = MaterialTheme.typography.titleLarge)
             Text(
-                "`$what` is a route in the navigation shell but its screen is still the old implementation. " +
-                    "It is listed here so the back stack and the overflow menu are honest about what exists.",
+                what,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
