@@ -259,19 +259,14 @@ fun ReleaseScreen(
         // The building/floor choice is made on its own screen, so it is read from ReleaseHandoff.
         val building = ReleaseHandoff.building
         val floor = ReleaseHandoff.floor
-        val stations = remember(state.devices) { state.devices.associateWith(::stationOf) }
+        val stations = remember(state.devices, state.host) { state.devices.associateWith { stationOf(it, state.host) } }
         val q = query.trim()
         val shownDevices = remember(state.devices, q, building, floor, stations) {
             state.devices.filter { d ->
                 val where = stations[d]
                 (building == null || where?.building == building) &&
                     (floor == null || where?.floor == floor) &&
-                    (
-                        q.isEmpty() ||
-                            listOf(d.name, d.model, d.make, d.location, d.assetTag, d.serialNumber, d.description)
-                                .filterNotNull().any { it.contains(q, ignoreCase = true) } ||
-                            d.deviceGroups.any { it.contains(q, ignoreCase = true) }
-                        )
+                    where != null && matchesPrinterQuery(d, where, q)
             }
         }
         /*
@@ -465,7 +460,7 @@ private fun LazyListScope.printersTab(
             value = query,
             onValueChange = onQuery,
             modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("Search building, room or model") },
+            placeholder = { Text("Building, address or room", maxLines = 1, overflow = TextOverflow.Ellipsis) },
             leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
             singleLine = true,
             shape = RoundedCornerShape(28.dp),
@@ -501,7 +496,7 @@ private fun LazyListScope.printersTab(
     }
 
     /*
-     * One row, not a chip per building: GMU has ~60 of them across 302 stations, and a chip wall
+     * One row, not a chip per building: GMU has dozens of them across hundreds of stations, and a chip wall
      * pushes the actual printers off the screen. The choice is made on its own screen; this only
      * reports it and offers to clear it.
      */
@@ -513,7 +508,7 @@ private fun LazyListScope.printersTab(
         ) {
             OutlinedButton(onClick = onOpenFilter, modifier = Modifier.weight(1f)) {
                 ButtonGlyph(Icons.Filled.FilterList)
-                Text(filterSummary(building, floor), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(filterSummary(building, floor), maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
             }
             if (building != null || floor != null) {
                 TextButton(onClick = onClearFilter) { Text("Clear") }
@@ -526,7 +521,7 @@ private fun LazyListScope.printersTab(
             EmptyState(
                 icon = Icons.Filled.Search,
                 title = "No printer matches \"${query.trim()}\"",
-                body = "Try a building, a room, or the model printed under the panel screen.",
+                body = "Try a building name, street address, room or printer model.",
             )
         }
         return
@@ -537,6 +532,8 @@ private fun LazyListScope.printersTab(
         items(favourites, key = { "fav-" + it.location }) { d ->
             DeviceRow(
                 device = d,
+                station = stations.getValue(d),
+                showBuilding = true,
                 last = false,
                 favourite = true,
                 onClick = { onPick(d) },
@@ -549,6 +546,8 @@ private fun LazyListScope.printersTab(
         items(recent, key = { "recent-" + it.location }) { d ->
             DeviceRow(
                 device = d,
+                station = stations.getValue(d),
+                showBuilding = true,
                 last = true,
                 favourite = d.location in favouriteLocations,
                 onClick = { onPick(d) },
@@ -558,40 +557,24 @@ private fun LazyListScope.printersTab(
     }
     if (rest.isNotEmpty()) {
         item(key = "all-printers") {
-            SectionLabel(if (building == null) "All printers, by building" else "$building, by floor")
+            SectionLabel(if (building == null) "All printers, by building" else "Printers by floor")
         }
         val byBuilding = rest.groupBy { stations[it]?.building ?: "Other" }
         byBuilding.toList()
-            .sortedWith(compareBy({ it.first == "Other" }, { it.first }))
+            .sortedWith(compareBy({ it.first == "Other" }, { buildingLocation(it.first)?.campusName.orEmpty() }, { buildingLabel(it.first) }))
             .forEach { (bldg, inBuilding) ->
-                // The building header is redundant once a single building is filtered to.
-                if (building == null && (byBuilding.size > 1 || bldg != "Other")) {
-                    item(key = "building-$bldg") {
-                        Text(
-                            bldg,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(start = 2.dp, top = 6.dp),
-                        )
-                    }
+                item(key = "building-$bldg") {
+                    PrinterBuildingDetails(bldg, Modifier.padding(start = 2.dp, top = 10.dp, bottom = 2.dp))
                 }
                 val byFloor = inBuilding.groupBy { stations[it]?.floor }
                 byFloor.toList()
-                    .sortedWith(compareBy({ it.first == null }, { it.first?.toIntOrNull() ?: Int.MAX_VALUE }, { it.first }))
-                    .forEach { (floor, inFloor) ->
-                        if (floor != null && byFloor.size > 1) {
-                            item(key = "floor-$bldg-$floor") {
-                                Text(
-                                    "Floor $floor",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(start = 8.dp, top = 2.dp),
-                                )
-                            }
-                        }
+                    .sortedWith(compareBy({ floorOrder(it.first) }, { it.first }))
+                    .forEach { (_, inFloor) ->
                         items(inFloor.sortedBy { it.label }, key = { it.location }) { d ->
                             DeviceRow(
                                 device = d,
+                                station = stations.getValue(d),
+                                showBuilding = false,
                                 last = false,
                                 favourite = d.location in favouriteLocations,
                                 onClick = { onPick(d) },
@@ -603,10 +586,12 @@ private fun LazyListScope.printersTab(
     }
 }
 
-/** A printer row: 44 dp print avatar, name, mono model line, capability facts, and where it leads. */
+/** Full-width location details for standalone rows; room, sticker label and capabilities below. */
 @Composable
 private fun DeviceRow(
     device: Device,
+    station: Station,
+    showBuilding: Boolean,
     last: Boolean,
     favourite: Boolean,
     onClick: () -> Unit,
@@ -617,47 +602,51 @@ private fun DeviceRow(
         shape = MaterialTheme.shapes.large,
         color = MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
-        Row(
-            Modifier.padding(start = 14.dp, end = 4.dp, top = 14.dp, bottom = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            RowAvatar(Icons.Filled.Print)
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(device.label, style = MaterialTheme.typography.titleMedium)
-                MonoDetail(device.sublabel)
-                // Wrapping, not scrolling: a long model line plus three chips has to grow a second
-                // line rather than push the chevron off the card.
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    // Capability facts, not colour-coded status: what this machine can do.
-                    if (device.colorSupported) FactChip(Icons.Filled.Palette, "Colour")
-                    else FactChip(Icons.Filled.MonochromePhotos, "B&W only")
-                    if (device.duplexSupported) FactChip(Icons.Filled.Description, "Two-sided")
-                    if (last) FactChip(Icons.Filled.History, "Used before")
-                }
+        Column {
+            if (showBuilding) {
+                PrinterBuildingDetails(station.building, Modifier.padding(start = 14.dp, end = 14.dp, top = 14.dp))
             }
-            /*
-             * Its own button, not a swipe or a long-press: starring has to be discoverable from
-             * looking, and the row's tap already means "release here", which is the one gesture
-             * that must never be ambiguous when a student is standing at a machine.
-             */
-            IconButton(onClick = onToggleFavourite) {
-                Icon(
-                    if (favourite) Icons.Filled.Star else Icons.Filled.StarBorder,
-                    contentDescription = if (favourite) {
-                        "Remove ${device.label} from starred"
-                    } else {
-                        "Star ${device.label}"
-                    },
-                    tint = if (favourite) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
+            Row(
+                Modifier.padding(start = 14.dp, end = 4.dp, top = 14.dp, bottom = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                RowAvatar(Icons.Filled.Print)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text(stationRoom(station) ?: device.label, style = MaterialTheme.typography.titleMedium)
+                    if (stationRoom(station) != null) MonoDetail(device.label)
+                    // Capabilities wrap independently of the sticker label and star control.
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        // Capability facts, not colour-coded status: what this machine can do.
+                        if (device.colorSupported) FactChip(Icons.Filled.Palette, "Colour")
+                        else FactChip(Icons.Filled.MonochromePhotos, "B&W only")
+                        if (device.duplexSupported) FactChip(Icons.Filled.Description, "Two-sided")
+                        if (last) FactChip(Icons.Filled.History, "Used before")
+                    }
+                }
+                /*
+                 * Its own button, not a swipe or a long-press: starring has to be discoverable from
+                 * looking, and the row's tap already means "release here", which is the one gesture
+                 * that must never be ambiguous when a student is standing at a machine.
+                 */
+                IconButton(onClick = onToggleFavourite) {
+                    Icon(
+                        if (favourite) Icons.Filled.Star else Icons.Filled.StarBorder,
+                        contentDescription = if (favourite) {
+                            "Remove ${device.label} from starred"
+                        } else {
+                            "Star ${device.label}"
+                        },
+                        tint = if (favourite) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
             }
         }
     }
@@ -922,23 +911,24 @@ fun ConfirmRelease(
                 shape = MaterialTheme.shapes.large,
                 color = MaterialTheme.colorScheme.surfaceContainerLow,
             ) {
-                Row(
-                    Modifier.padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    RowAvatar(Icons.Filled.Print)
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Text(device.label, style = MaterialTheme.typography.titleMedium)
-                        MonoDetail(device.sublabel)
-                        if (ReleaseHandoff.openedFromCode) {
-                            // §4 scenario 16: say how the printer was reached; it changes what the
-                            // service desk would check first.
-                            FactChip(
-                                icon = Icons.Filled.QrCodeScanner,
-                                label = "Opened from a code",
-                                modifier = Modifier.padding(top = 4.dp),
-                            )
+                val station = stationOf(device, state.host)
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    PrinterBuildingDetails(station.building)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        RowAvatar(Icons.Filled.Print)
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            stationRoom(station)?.let { Text(it, style = MaterialTheme.typography.titleSmall) }
+                            MonoDetail(device.label)
+                            MonoDetail(device.sublabel)
+                            if (ReleaseHandoff.openedFromCode) {
+                                // §4 scenario 16: say how the printer was reached; it changes what the
+                                // service desk would check first.
+                                FactChip(
+                                    icon = Icons.Filled.QrCodeScanner,
+                                    label = "Opened from a code",
+                                    modifier = Modifier.padding(top = 4.dp),
+                                )
+                            }
                         }
                     }
                 }

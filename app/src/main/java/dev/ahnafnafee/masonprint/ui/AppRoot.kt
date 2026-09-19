@@ -68,6 +68,9 @@ fun AppRoot(
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
 
+    // Building keys belong to a server; a previous campus must not hide another server's printers.
+    LaunchedEffect(state.host) { ReleaseHandoff.clearFilter() }
+
     // ---- notices: a message with an action is a snackbar, never a modal ----------------------
     // `state.notice` is written by Session at the moments that used to deserve a dialog; the action
     // turns the acknowledgement into a navigation or a retry, which a dialog could not offer.

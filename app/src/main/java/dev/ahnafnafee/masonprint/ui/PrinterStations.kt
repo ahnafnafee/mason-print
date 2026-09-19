@@ -1,77 +1,95 @@
 package dev.ahnafnafee.masonprint.ui
 
 import dev.ahnafnafee.masonprint.data.model.Device
+import java.text.Normalizer
+import java.util.Locale
 
-/** Building + floor parsed from a station name. */
-internal data class Station(val building: String, val floor: String?)
+/** Campus-qualified group, floor and room. The server currently leaves its location fields empty. */
+internal data class Station(val building: String, val floor: String?, val room: String? = null)
 
 /**
- * Where a printer is, worked out from its name.
- *
- * This has to be parsed because the server does not say: GMU returns `Building`, `Floor`, `Area`,
- * `DeviceLocation` and `Region` on every device and leaves all five `null`, and `Description` is a
- * verbatim copy of `Name`. The name is the only location data there is.
- *
- * The shape is `<campus>-<building><floor>-<room>-<model>`: `FX-JC1-135-568`, `FX-AFC1-105-3930`,
- * `FX-SUB12-2142-5840`.
- *
- * **Exactly one trailing digit is the floor.** `SUB12` is Student Union I, floor 2 — not "SUB",
- * floor 12 — and its room `2142` agrees. Taking every trailing digit invents twelve-storey
- * buildings and splits one building into several.
- *
- * A token with no trailing digit keeps its whole name and takes the floor from the first digit of
- * the room (`AR-FH-217` → FH, floor 2). Anything that will not parse becomes "Other" with no
- * floor — grouped, never hidden, so no printer is unreachable.
+ * Resolve known GMU aliases before separating the one-digit floor suffix. Exact aliases win:
+ * SUB12 is SUB1 / floor 2, NEM21 is NEM2 / floor 1, and 4260CBR is a street-number code.
+ * Keep unknown stations reachable and never apply this university's addresses to another host.
  */
-internal fun stationOf(device: Device): Station {
-    val parts = (device.name ?: device.label).split('-', ' ').map { it.trim() }.filter { it.isNotEmpty() }
+internal fun stationOf(device: Device, host: String): Station {
+    val parts = (device.name ?: device.label).split('-', ' ').filter { it.isNotBlank() }
+        .map { it.uppercase(Locale.ROOT) }
+    val campus = parts.firstOrNull()
     val token = parts.getOrNull(1)
-    if (token == null || !token.first().isLetter()) return Station("Other", null)
-
-    val hasFloorDigit = token.last().isDigit()
-    val building = (if (hasFloorDigit) token.dropLast(1) else token).uppercase()
-    val floorFromToken = if (hasFloorDigit) token.last().toString() else null
-    val floorFromRoom = parts.getOrNull(2)?.firstOrNull { it.isDigit() }?.toString()
-    return Station(building.ifBlank { "Other" }, floorFromToken ?: floorFromRoom)
+    if (campus == null || token == null) return Station("Other", null)
+    val room = parts.getOrNull(2)
+    val isGmu = host.equals("mobileprint.gmu.edu", ignoreCase = true)
+    val exact = if (isGmu) gmuBuildingForCode("$campus-$token") else null
+    val hasFloor = exact == null && token.last().isDigit()
+    val code = if (hasFloor) token.dropLast(1) else token
+    val location = exact ?: if (isGmu) gmuBuildingForCode("$campus-$code") else null
+    val level = if (location != null) when ("$campus-$code") {
+        "AR-FHB", "AR-HHB" -> "B"
+        "FX-JCG", "FX-ENTG", "FX-MHG", "FX-TG" -> "G"
+        "FX-ABL", "FX-TL", "FX-HOLL" -> "L"
+        else -> null
+    } else null
+    val floor = if (hasFloor) token.last().toString() else level ?: room?.let {
+        if (it.startsWith("G") && it.drop(1).firstOrNull()?.isDigit() == true) "G"
+        else it.firstOrNull { ch -> ch.isDigit() }?.toString()
+    }
+    return Station(location?.key ?: "$campus-$code", floor, room)
 }
 
-/**
- * Plain-English names for the building codes on the stickers.
- *
- * Deliberately partial. The code is what is printed on the machine and on the QR label, so the code
- * is always what the UI leads with and this map only ever *adds* a hint — a missing or imperfect
- * name can never send somebody to the wrong place, because the code beside it is authoritative.
- * Codes absent here simply show as themselves.
- */
-private val BuildingNames: Map<String, String> = mapOf(
-    "AFC" to "Aquatic and Fitness Center",
-    "AQ" to "Aquia Building",
-    "CDC" to "Child Development Center",
-    "CFA" to "Center for the Arts",
-    "DK" to "David King Hall",
-    "ENG" to "Engineering Building",
-    "EXPL" to "Exploratory Hall",
-    "FHLIB" to "Fenwick Library",
-    "FM" to "Facilities Management",
-    "HRZ" to "Horizon Hall",
-    "HUB" to "The HUB",
-    "IN" to "Innovation Hall",
-    "JC" to "Johnson Center",
-    "KRUG" to "Krug Hall",
-    "LAWLIB" to "Law Library",
-    "MH" to "Merten Hall",
-    "NEM" to "Nguyen Engineering Building",
-    "PFHS" to "Peterson Family Health Sciences Hall",
-    "PLANET" to "Planetary Hall",
-    "SUB1" to "Student Union Building I",
-)
+internal fun floorLabel(floor: String): String = when (floor) {
+    "B" -> "Basement"
+    "G" -> "Ground floor"
+    "L" -> "Lower level"
+    else -> "Floor $floor"
+}
 
-/** The building's plain name, or null when this code is not one we can name. */
-internal fun buildingName(code: String): String? = BuildingNames[code.uppercase()]
+internal fun floorOrder(floor: String?): Int = when (floor) {
+    "B" -> -3
+    "L" -> -2
+    "G" -> -1
+    else -> floor?.toIntOrNull() ?: Int.MAX_VALUE
+}
 
-/** What the printer list's filter button reads: "All buildings", "JC · Johnson Center · Floor 1". */
-internal fun filterSummary(building: String?, floor: String?): String {
-    val head = building?.let { code -> buildingName(code)?.let { "$code · $it" } ?: code }
-        ?: return if (floor == null) "All buildings" else "All buildings · Floor $floor"
-    return if (floor == null) head else "$head · Floor $floor"
+internal fun stationRoom(station: Station): String? {
+    val room = station.room?.let {
+        when (it) {
+            "LOBBY" -> "Lobby"
+            "HALL" -> "Hallway"
+            "LIB" -> "Library"
+            "LIBFRNT" -> "Library entrance"
+            "LOCKERS" -> "Lockers"
+            "LAB" -> "Lab"
+            "BOXOFF" -> "Box office"
+            "PRODOFF" -> "Production office"
+            "PARTS" -> "Parts"
+            else -> if (it.any(Char::isDigit)) "Room $it" else it
+        }
+    }
+    return listOfNotNull(station.floor?.let(::floorLabel), room).joinToString(" · ").ifBlank { null }
+}
+
+internal fun buildingName(key: String): String? = buildingLocation(key)?.name
+internal fun buildingLabel(key: String): String = buildingName(key) ?: key
+
+internal fun filterSummary(building: String?, floor: String?): String =
+    listOfNotNull(building?.let(::buildingLabel) ?: "All buildings", floor?.let(::floorLabel)).joinToString(" · ")
+
+private fun searchText(text: String): String = Normalizer.normalize(text, Normalizer.Form.NFD)
+    .replace(Regex("\\p{M}+"), "").lowercase(Locale.ROOT)
+
+internal fun matchesBuildingQuery(key: String, query: String): Boolean =
+    matchesLocationQuery(listOf(key, buildingLocation(key)?.searchText.orEmpty()), query)
+
+internal fun matchesPrinterQuery(device: Device, station: Station, query: String): Boolean =
+    matchesLocationQuery(
+        listOfNotNull(device.name, device.model, device.make, device.location, device.assetTag,
+            device.serialNumber, device.description, stationRoom(station),
+            buildingLocation(station.building)?.searchText) + device.deviceGroups + station.building,
+        query,
+    )
+
+private fun matchesLocationQuery(fields: List<String>, query: String): Boolean {
+    val haystack = searchText(fields.joinToString(" "))
+    return searchText(query).trim().split(Regex("\\s+")).all(haystack::contains)
 }

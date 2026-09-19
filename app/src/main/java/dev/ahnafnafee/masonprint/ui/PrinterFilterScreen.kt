@@ -40,44 +40,34 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.ahnafnafee.masonprint.core.AppState
 
-/**
- * Narrow the printer list by building and floor.
- *
- * Its own screen on purpose. GMU publishes 302 stations across roughly sixty buildings, and every
- * inline control for that many — a chip row, a dropdown — either fills the screen or becomes a
- * scroll of its own on top of the list it is meant to narrow. Here the buildings are a searchable
- * list with their printer counts, which is the only shape that stays usable at that size.
- *
- * Buildings lead with the **code**, because the code is what is printed on the machine and on the
- * QR sticker; the plain name is a hint beside it (see [buildingName]).
- */
+/** Building names, campus and physical addresses; original label codes remain searchable. */
 @Composable
 internal fun PrinterFilterScreen(state: AppState, onBack: () -> Unit) {
     val building = ReleaseHandoff.building
     val floor = ReleaseHandoff.floor
     var search by rememberSaveable { mutableStateOf("") }
+    var showAllFloors by rememberSaveable { mutableStateOf(false) }
 
-    val stations = remember(state.devices) { state.devices.map(::stationOf) }
+    val stations = remember(state.devices, state.host) { state.devices.map { stationOf(it, state.host) } }
     val buildings = remember(stations) {
         stations.groupingBy { it.building }.eachCount().toList()
-            .sortedWith(compareBy({ it.first == "Other" }, { it.first }))
+            .sortedWith(compareBy({ it.first == "Other" }, { buildingLocation(it.first)?.campusName.orEmpty() }, { buildingLabel(it.first) }))
     }
     // Only the floors the chosen building actually has — an empty floor filter is a dead end.
     val floors = remember(stations, building) {
         stations.filter { building == null || it.building == building }
             .mapNotNull { it.floor }
             .distinct()
-            .sortedBy { it.toIntOrNull() ?: Int.MAX_VALUE }
+            .sortedBy(::floorOrder)
     }
     val q = search.trim()
     val shown = remember(buildings, q) {
         if (q.isEmpty()) buildings
         else buildings.filter { (code, _) ->
-            code.contains(q, ignoreCase = true) || buildingName(code)?.contains(q, ignoreCase = true) == true
+            matchesBuildingQuery(code, q)
         }
     }
 
@@ -109,14 +99,21 @@ internal fun PrinterFilterScreen(state: AppState, onBack: () -> Unit) {
                     value = search,
                     onValueChange = { search = it },
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Search a building") },
+                    placeholder = { Text("Building, campus or address") },
                     leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                     singleLine = true,
                     shape = RoundedCornerShape(28.dp),
                 )
             }
 
-            if (floors.isNotEmpty()) {
+            if (building == null && floor == null && floors.isNotEmpty()) {
+                item(key = "floor-toggle") {
+                    TextButton(onClick = { showAllFloors = !showAllFloors }) {
+                        Text(if (showAllFloors) "Hide floors" else "Filter by floor")
+                    }
+                }
+            }
+            if (floors.isNotEmpty() && (building != null || floor != null || showAllFloors)) {
                 item(key = "floor-label") { SectionLabel("Floor") }
                 item(key = "floors") {
                     FlowRow(
@@ -132,7 +129,7 @@ internal fun PrinterFilterScreen(state: AppState, onBack: () -> Unit) {
                             FilterChip(
                                 selected = floor == f,
                                 onClick = { ReleaseHandoff.floor = if (floor == f) null else f },
-                                label = { Text("Floor $f") },
+                                label = { Text(floorLabel(f)) },
                             )
                         }
                     }
@@ -148,10 +145,12 @@ internal fun PrinterFilterScreen(state: AppState, onBack: () -> Unit) {
                     onClick = { ReleaseHandoff.clearFilter() },
                 )
             }
-            items(shown) { (code, count) ->
+            items(shown, key = { it.first }) { (code, count) ->
+                val location = buildingLocation(code)
                 FilterRow(
-                    title = buildingName(code)?.let { "$code · $it" } ?: code,
-                    supporting = if (count == 1) "1 printer" else "$count printers",
+                    title = buildingLabel(code),
+                    supporting = listOfNotNull(location?.campusName, if (count == 1) "1 printer" else "$count printers").joinToString(" · "),
+                    location = location,
                     selected = building == code,
                     onClick = {
                         // Changing building drops the floor: floor 3 of one building says nothing
@@ -160,6 +159,12 @@ internal fun PrinterFilterScreen(state: AppState, onBack: () -> Unit) {
                         ReleaseHandoff.floor = null
                     },
                 )
+            }
+            if (shown.isEmpty()) {
+                item(key = "no-match") {
+                    Text("No building matches this search. Try a name, campus, street or label code.",
+                        style = MaterialTheme.typography.bodyMedium)
+                }
             }
             item(key = "spacer") { Spacer(Modifier.height(MasonScrollSpacer)) }
         }
@@ -173,6 +178,7 @@ private fun FilterRow(
     supporting: String,
     selected: Boolean,
     onClick: () -> Unit,
+    location: BuildingLocation? = null,
 ) {
     Surface(
         onClick = onClick,
@@ -191,13 +197,14 @@ private fun FilterRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Column(Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(title, style = MaterialTheme.typography.titleSmall)
                 Text(
                     supporting,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                location?.let { PrinterAddress(it) }
             }
             if (selected) Icon(Icons.Filled.CheckCircle, contentDescription = null, Modifier.size(20.dp))
         }

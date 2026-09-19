@@ -96,6 +96,7 @@ private fun SettingRow(
     label: String,
     value: String,
     onClick: () -> Unit,
+    maxLines: Int = 1,
 ) {
     /*
      * A real container and a chevron, not text on the bar's own colour. Transparent rows with no
@@ -119,7 +120,7 @@ private fun SettingRow(
                 value,
                 style = MaterialTheme.typography.titleSmall,
                 textAlign = TextAlign.End,
-                maxLines = 1,
+                maxLines = maxLines,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
@@ -574,8 +575,14 @@ private fun QueueSelectionBar(
                 SettingRow(
                     icon = Icons.Filled.Print,
                     label = "Printer",
-                    value = state.selectedDevice?.label?.takeIf { it.isNotBlank() } ?: "Not chosen yet",
+                    value = state.selectedDevice?.let { device ->
+                        val station = stationOf(device, state.host)
+                        buildingName(station.building)?.let { name ->
+                            listOfNotNull(name, stationRoom(station)).joinToString(" · ")
+                        } ?: device.label
+                    } ?: "Not chosen yet",
                     onClick = selection.onPrinter,
+                    maxLines = 3,
                 )
                 SettingRow(
                     icon = if (onDepartment) Icons.Filled.BusinessCenter else Icons.Filled.Work,
