@@ -65,18 +65,40 @@ class PrintRequestsTest {
 
     // ------------------------------------------------------------------ release
 
+    /**
+     * The regression guard for the defect that made every release fail.
+     *
+     * `Owner` on this endpoint is a *redirect*: it asks the server to bill somebody other than the
+     * job's owner, which Pharos gates behind `Printing.Administration.ChangeChargingUser` and
+     * refuses on an ordinary student account. Because the server populates `Owner` on every job as
+     * a plain description of who it belongs to, writing it back made every release a redirect to
+     * yourself, and the server answered "Insufficient privileges to change charging user" no matter
+     * which funding source was chosen. This client has no redirect feature, so the key never goes.
+     */
     @Test
-    fun `release sends Owner and no CostCenterCode when the job has an owner`() {
-        val j = jobsOf(PrintRequests.release(listOf(job("loc/1", owner = "other student")), "dev/1", "card-9")).single()
-        assertEquals("other student", j.getValue("Owner").jsonPrimitive.content)
-        assertFalse("Owner and CostCenterCode are mutually exclusive", j.containsKey("CostCenterCode"))
+    fun `release never sends Owner, even for a job that has one`() {
+        val mine = jobsOf(PrintRequests.release(listOf(job("loc/1", owner = "me")), "dev/1", "card-9")).single()
+        assertFalse("Owner is a redirect, never a description", mine.containsKey("Owner"))
+
+        val theirs = jobsOf(PrintRequests.release(listOf(job("loc/2", owner = "other student")), "dev/1", "")).single()
+        assertFalse(theirs.containsKey("Owner"))
     }
 
+    /**
+     * The funding source the user picked is the only one that counts. Reusing the code stored on
+     * the job let the wire disagree with the "Charged to" line the user was reading, which is how a
+     * release reported "Asked to charge: My own balance" while billing a department.
+     */
     @Test
-    fun `release sends CostCenterCode when there is no owner`() {
-        val j = jobsOf(PrintRequests.release(listOf(job("loc/1", code = "10111-M17041")), "dev/1", "")).single()
-        assertEquals("10111-M17041", j.getValue("CostCenterCode").jsonPrimitive.content)
-        assertFalse(j.containsKey("Owner"))
+    fun `release ignores the code stored on the job and honours the chosen source`() {
+        val ownPurse = jobsOf(PrintRequests.release(listOf(job("loc/1", code = "10111-M17041")), "dev/1", "")).single()
+        assertFalse("no funding key means charge the owner", ownPurse.containsKey("CostCenterCode"))
+        assertFalse(ownPurse.containsKey("Owner"))
+
+        val chosen = jobsOf(
+            PrintRequests.release(listOf(job("loc/1")), "dev/1", "", costCenterCode = "10111-M17041"),
+        ).single()
+        assertEquals("10111-M17041", chosen.getValue("CostCenterCode").jsonPrimitive.content)
     }
 
     @Test

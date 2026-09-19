@@ -129,6 +129,11 @@ fun DiagnosticsScreen(
                     caps?.costCentersAllowed == true,
                     "Privileges.Printing.PayForPrint.CostCenters. Where this is Deny the server is unlikely to accept a CostCenterCode, but the app still lets you type one because the privilege and the code list are maintained separately.",
                 )
+                Bool(
+                    "Charge somebody else",
+                    caps?.chargingUserChangeAllowed == true,
+                    "Privileges.Printing.Administration.ChangeChargingUser. Gates the Owner key on a release body. This app never sends one.",
+                )
                 Row(Modifier.fillMaxWidth()) {
                     Label("Releasing as"); Value(state.fundingLabel)
                 }

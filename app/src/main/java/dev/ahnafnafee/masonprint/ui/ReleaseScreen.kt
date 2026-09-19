@@ -1138,7 +1138,7 @@ fun ReleaseResult(
                 ResultRow(
                     icon = Icons.Filled.CheckCircle,
                     tone = MasonTone.Ok,
-                    name = job?.name ?: loc.substringAfterLast('/'),
+                    name = job?.name ?: outcome.releasedNames[loc] ?: loc.substringAfterLast('/'),
                     amount = job?.let { releaseMoney(state, it.cost) },
                     line = "Released.",
                 )

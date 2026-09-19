@@ -127,15 +127,31 @@ data class Privileges(
     val creditCardGateway: Boolean,
     val quotaView: Boolean,
     val userAdministration: Boolean,
+    /**
+     * `Printing.Administration.ChangeChargingUser` — whether this account may bill somebody other
+     * than a job's owner. It gates the `Owner` key on a release body, never the ordinary
+     * "charge me" path.
+     *
+     * Informational only. Nothing branches on it, for the same reason `Printing.Release` is not
+     * modelled at all: GMU returns Deny here for students who release jobs every day, so these
+     * flags describe an administrative capability rather than what the student may do. See
+     * `GmuLivePayloadTest`. It is read so Diagnostics can *show* it, because it is the privilege
+     * Pharos names when it refuses a release, and a service-desk conversation goes better when
+     * the student can say which flag the server quoted.
+     */
+    val changeChargingUser: Boolean,
 ) {
     companion object {
         private fun truthy(v: String?): Boolean =
             !(v.isNullOrBlank() || v.equals("deny", true) || v.equals("no", true))
 
         fun from(o: JsonObject?): Privileges {
-            if (o == null) return Privileges(false, false, false, false, false, false, false, false)
+            if (o == null) {
+                return Privileges(false, false, false, false, false, false, false, false, false)
+            }
             val printing = o.obj("Printing")
             val payForPrint = printing?.obj("PayForPrint")
+            val administration = printing?.obj("Administration")
             return Privileges(
                 webUpload = truthy(printing?.strCI("WebUpload")),
                 payForPrint = truthy(payForPrint?.strCI("Enabled") ?: payForPrint?.strCI("PayForPrint")),
@@ -147,6 +163,7 @@ data class Privileges(
                 userAdministration = o.obj("UserAdministration")?.let { ua ->
                     truthy(ua.strCI("View")) || truthy(ua.strCI("Update")) || truthy(ua.strCI("Create"))
                 } ?: false,
+                changeChargingUser = truthy(administration?.strCI("ChangeChargingUser")),
             )
         }
     }

@@ -83,10 +83,11 @@ object PrintRequests {
      * card id or `""` — both always present, because the bundle always sends both keys. Omitting
      * `CardId` entirely is not equivalent to sending it empty on every deployment.
      *
-     * `costCenterCode` overrides the funding source for every job in the call. Null keeps whatever
-     * the job already carried, which is what a plain "release at this printer" does — the point of
-     * the parameter is that *this* is where a department charge becomes real, because the debit
-     * happens here and nowhere else (docs/FINDINGS.md §12).
+     * `costCenterCode` is the funding source the user chose for every job in the call. Null means
+     * "charge whoever owns these", which is what a plain "release at this printer" does and what
+     * "my own balance" means: no funding key is written at all, and the server bills the owner.
+     * *This* is where a department charge becomes real, because the debit happens here and nowhere
+     * else (docs/FINDINGS.md §12).
      *
      * `Password` is included per job when the job is protected (`ProtectedBy != "None"`), which is
      * the "release a job from a phone, but prove you own it" path. `ChargeOwner` is deliberately
@@ -111,23 +112,33 @@ object PrintRequests {
                         // The bundle always writes this key, as `{}` when the job carries nothing.
                         put("FinishingOptions", job.finishing?.let { FinishingPayload.from(it).forJobUpdate() } ?: emptyObject())
                         /*
-                         * `Owner` and `CostCenterCode` are mutually exclusive on this endpoint, and
-                         * the empty code is *omitted* rather than sent empty:
+                         * `Owner` and `CostCenterCode` are mutually exclusive here, and the empty
+                         * code is *omitted* rather than sent empty:
                          *
                          *   ClientPendingOwner ? t.Owner = ClientPendingOwner
                          *     : ClientPendingCostCenterCode && (t.CostCenterCode = …)
                          *
                          * (`script.min.js:1@2416520`). Sending `CostCenterCode: ""` is correct on
                          * PATCH/cost, where it means "back to my purse", and is not what the release
-                         * body does — docs/FUNDING-MODELS.md §2.2. `Owner` wins when both are known,
-                         * which is the "release someone else's job to their department" case.
+                         * body does (docs/FUNDING-MODELS.md §2.2).
+                         *
+                         * **`ClientPendingOwner` is a redirect, not a description.** It is an owner
+                         * the user deliberately chose so somebody else gets charged. `job.owner` is
+                         * merely who the job belongs to, and the server populates it on every job,
+                         * so reading the bundle's rule as `job.owner` put `Owner: <yourself>` in
+                         * every release this app has ever sent. Pharos treats any `Owner` as
+                         * changing the charging user and refuses the whole call unless
+                         * `Printing.Administration.ChangeChargingUser` allows it, which on an
+                         * ordinary student account it does not: every release came back
+                         * "Insufficient privileges to change charging user", whichever funding
+                         * source the user had picked.
+                         *
+                         * This client has no "charge a different person" feature, so it never has a
+                         * pending owner and the key is never written. Omitting both keys is how you
+                         * say "charge whoever owns this", which is what "my own balance" means.
                          */
-                        val code = (costCenterCode ?: job.costCenterCode)?.trim().orEmpty()
-                        val owner = job.owner?.trim().orEmpty()
-                        when {
-                            owner.isNotEmpty() -> put("Owner", owner)
-                            code.isNotEmpty() -> put("CostCenterCode", code)
-                        }
+                        val code = costCenterCode?.trim().orEmpty()
+                        if (code.isNotEmpty()) put("CostCenterCode", code)
                         val password = passwords[job.location]
                         if (job.needsPassword && !password.isNullOrBlank()) put("Password", password)
                     }

@@ -178,6 +178,15 @@ data class ReleaseOutcome(
     val refused: List<RefusedJob>,
     val balanceBefore: String?,
     val balanceAfter: String?,
+    /**
+     * Document names for [released], by location, captured *before* the call.
+     *
+     * The receipt cannot look them up afterwards: a released job leaves the pending queue, so by
+     * the time the result screen draws, `state.jobs` no longer holds it and the row falls back to
+     * the location, which on this server is a 65-character opaque id. A refusal never had this
+     * problem because [RefusedJob] already carries its name.
+     */
+    val releasedNames: Map<String, String> = emptyMap(),
     /** Set when the call never got an answer at all, which is different from every job being refused. */
     val transport: PharosFailure? = null,
 ) {
@@ -965,6 +974,7 @@ class Session(private val graph: AppGraph) {
                                 fundingIntent = intent,
                                 requested = jobs.size,
                                 released = moved,
+                                releasedNames = names,
                                 refused = refused,
                                 balanceBefore = before,
                                 balanceAfter = after,

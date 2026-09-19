@@ -148,6 +148,7 @@ class SettingsDocument(val raw: JsonObject) {
             serverInterfaceVersion = release?.obj("MobilePrint")?.strCI("Server Interface Version"),
             guestAccountsAllowed = pcB("Guest Accounts") ?: false,
             costCentersAllowed = user?.privileges?.costCenters ?: false,
+            chargingUserChangeAllowed = user?.privileges?.changeChargingUser ?: false,
             formats = formats(),
             user = user,
         )
@@ -274,6 +275,12 @@ data class Capabilities(
      * it has been used once, which is why free text stays available).
      */
     val costCentersAllowed: Boolean,
+    /**
+     * `Privileges.Printing.Administration.ChangeChargingUser`, shown on Diagnostics and branched
+     * on nowhere. See [Privileges.changeChargingUser] for why these administrative flags do not
+     * describe what a student may do.
+     */
+    val chargingUserChangeAllowed: Boolean,
     val formats: ServerFormats,
     val user: PharosUser?,
 ) {
@@ -314,6 +321,7 @@ data class Capabilities(
             transactionLabels = emptyList(), documentTypeCategories = emptyList(),
             mobilePluginVersion = null, serverInterfaceVersion = null,
             guestAccountsAllowed = false, costCentersAllowed = false,
+            chargingUserChangeAllowed = false,
             formats = ServerFormats(null, null, "$0.00"), user = null,
         )
     }
