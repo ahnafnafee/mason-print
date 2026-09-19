@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.size
@@ -22,6 +24,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -40,16 +43,18 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
 import dev.ahnafnafee.masonprint.core.AppState
 
-/** Building names, campus and physical addresses; original label codes remain searchable. */
+/** Edit a draft filter; only the pinned Show printers action applies it to the printer list. */
 @Composable
 internal fun PrinterFilterScreen(state: AppState, onBack: () -> Unit) {
-    val building = ReleaseHandoff.building
-    val floor = ReleaseHandoff.floor
+    var building by rememberSaveable(state.host) { mutableStateOf(ReleaseHandoff.building) }
+    var floor by rememberSaveable(state.host) { mutableStateOf(ReleaseHandoff.floor) }
     var search by rememberSaveable { mutableStateOf("") }
     var showAllFloors by rememberSaveable { mutableStateOf(false) }
+    val keyboard = LocalSoftwareKeyboardController.current
 
     val stations = remember(state.devices, state.host) { state.devices.map { stationOf(it, state.host) } }
     val buildings = remember(stations) {
@@ -70,6 +75,9 @@ internal fun PrinterFilterScreen(state: AppState, onBack: () -> Unit) {
             matchesBuildingQuery(code, q)
         }
     }
+    val matchingCount = remember(stations, building, floor) {
+        stations.count { (building == null || it.building == building) && (floor == null || it.floor == floor) }
+    }
 
     Scaffold(
         modifier = Modifier.imePadding(),
@@ -78,15 +86,41 @@ internal fun PrinterFilterScreen(state: AppState, onBack: () -> Unit) {
                 title = { Text("Filter printers") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Cancel filter changes")
                     }
                 },
                 actions = {
                     if (building != null || floor != null) {
-                        TextButton(onClick = { ReleaseHandoff.clearFilter() }) { Text("Clear") }
+                        TextButton(onClick = { building = null; floor = null }) { Text("Clear") }
                     }
                 },
             )
+        },
+        bottomBar = {
+            Surface(color = MaterialTheme.colorScheme.surfaceContainer, tonalElevation = 3.dp) {
+                Column(
+                    Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        filterSummary(building, floor),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Button(
+                        onClick = {
+                            ReleaseHandoff.building = building
+                            ReleaseHandoff.floor = floor
+                            keyboard?.hide()
+                            onBack()
+                        },
+                        enabled = matchingCount > 0,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    ) {
+                        Text(if (matchingCount == 1) "Show 1 printer" else "Show $matchingCount printers")
+                    }
+                }
+            }
         },
     ) { bar ->
         LazyColumn(
@@ -106,14 +140,14 @@ internal fun PrinterFilterScreen(state: AppState, onBack: () -> Unit) {
                 )
             }
 
-            if (building == null && floor == null && floors.isNotEmpty()) {
+            if (q.isEmpty() && building == null && floor == null && floors.isNotEmpty()) {
                 item(key = "floor-toggle") {
                     TextButton(onClick = { showAllFloors = !showAllFloors }) {
                         Text(if (showAllFloors) "Hide floors" else "Filter by floor")
                     }
                 }
             }
-            if (floors.isNotEmpty() && (building != null || floor != null || showAllFloors)) {
+            if (q.isEmpty() && floors.isNotEmpty() && (building != null || floor != null || showAllFloors)) {
                 item(key = "floor-label") { SectionLabel("Floor") }
                 item(key = "floors") {
                     FlowRow(
@@ -122,13 +156,13 @@ internal fun PrinterFilterScreen(state: AppState, onBack: () -> Unit) {
                     ) {
                         FilterChip(
                             selected = floor == null,
-                            onClick = { ReleaseHandoff.floor = null },
+                            onClick = { floor = null },
                             label = { Text("Any floor") },
                         )
                         floors.forEach { f ->
                             FilterChip(
                                 selected = floor == f,
-                                onClick = { ReleaseHandoff.floor = if (floor == f) null else f },
+                                onClick = { floor = if (floor == f) null else f },
                                 label = { Text(floorLabel(f)) },
                             )
                         }
@@ -137,13 +171,15 @@ internal fun PrinterFilterScreen(state: AppState, onBack: () -> Unit) {
             }
 
             item(key = "building-label") { SectionLabel("Building") }
-            item(key = "all-buildings") {
-                FilterRow(
-                    title = "All buildings",
-                    supporting = "${state.devices.size} printers",
-                    selected = building == null,
-                    onClick = { ReleaseHandoff.clearFilter() },
-                )
+            if (q.isEmpty()) {
+                item(key = "all-buildings") {
+                    FilterRow(
+                        title = "All buildings",
+                        supporting = "${state.devices.size} printers",
+                        selected = building == null,
+                        onClick = { building = null; floor = null },
+                    )
+                }
             }
             items(shown, key = { it.first }) { (code, count) ->
                 val location = buildingLocation(code)
@@ -155,8 +191,12 @@ internal fun PrinterFilterScreen(state: AppState, onBack: () -> Unit) {
                     onClick = {
                         // Changing building drops the floor: floor 3 of one building says nothing
                         // about another, and a stale floor would show an empty list.
-                        ReleaseHandoff.building = code
-                        ReleaseHandoff.floor = null
+                        if (building != code) {
+                            building = code
+                            floor = null
+                        }
+                        search = ""
+                        keyboard?.hide()
                     },
                 )
             }

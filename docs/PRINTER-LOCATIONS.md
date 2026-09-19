@@ -32,6 +32,12 @@ printers, along with the release confirmation, carry their own location details.
 remain visible for matching the physical printer. Search accepts addresses, campuses, old building
 names, label aliases, rooms and models, including several terms entered together.
 
+The filter screen keeps building and floor edits as a draft. Its pinned **Show N printers** button
+applies the selection and returns to the printer list; Back discards the draft, including Clear.
+The footer shows the selected location and matching count, and stays above the search keyboard.
+While searching, building matches take priority over floor controls. Choosing a building dismisses
+the keyboard so the floor choices and confirmation action are easy to reach.
+
 ## Updating the mapping
 
 Update the catalog and research crosswalk together, keeping source URLs and unresolved questions.
@@ -51,3 +57,9 @@ grouped list, starred cards, release confirmation and unresolved-address display
 themes were inspected, including 1.3 font scaling for a long building name. The temporary preview
 activity and sample assets were removed before the final builds; no authenticated print or release
 was performed for this location-only change.
+
+The confirmation follow-up was also checked on the emulator: choosing Fuse floor 6 changes the
+button from seven printers to one, applying shows room 6318, and cancelling either a selection or
+Clear preserves the previous filter. Searching for Activities while the keyboard is open keeps
+the result and bottom action visible. The footer was inspected with a long building name at 1.3
+font scaling in light mode as well as the dark-mode search and selection flows.
