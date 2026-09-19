@@ -160,18 +160,47 @@ class PrintRequestsTest {
         assertEquals("10111-M17041", charged.getValue("CostCenterCode").jsonPrimitive.content)
     }
 
+    /**
+     * The regression guard for a change that succeeded and did nothing.
+     *
+     * Probed against GMU: `PATCH /PharosAPI/printjobs` with `Copies` at the *top level* answers 200
+     * and leaves the job exactly as it was; the same value inside the job's own row answers 200 and
+     * applies. Because the top-level form was used whenever the selection agreed, and one selected
+     * job always agrees with itself, every single-job copies, sides or colour change was a no-op the
+     * 200 concealed.
+     */
     @Test
-    fun `update sends FinishingOptions once when every selected job agrees`() {
-        val b = body(PrintRequests.update(listOf(job("loc/1"), job("loc/2")), payload, null, null))
-        assertTrue(b.containsKey("FinishingOptions"))
-        jobsOf(b.encode()).forEach { assertFalse("redundant per-job copy", it.containsKey("FinishingOptions")) }
+    fun `update writes FinishingOptions on every job row, agreeing or not`() {
+        val agreeing = body(PrintRequests.update(listOf(job("loc/1"), job("loc/2")), payload, null, null))
+        jobsOf(agreeing.encode()).forEach {
+            assertTrue("GMU only reads the per-job copy", it.containsKey("FinishingOptions"))
+        }
+
+        val differing = body(
+            PrintRequests.update(listOf(job("loc/1", copies = 1), job("loc/2", copies = 3)), payload, null, null),
+        )
+        jobsOf(differing.encode()).forEach { assertTrue(it.containsKey("FinishingOptions")) }
+
+        val single = body(PrintRequests.update(listOf(job("loc/1")), payload, null, null))
+        assertTrue(
+            "one job agrees with itself, which is exactly the case that was broken",
+            jobsOf(single.encode()).single().containsKey("FinishingOptions"),
+        )
     }
 
+    /**
+     * The top-level copy stays where the bundle writes it. GMU ignores it, but a deployment that
+     * reads it instead of the per-job one is then served as well, and it costs a few bytes.
+     */
     @Test
-    fun `update moves FinishingOptions per job when the selection disagrees`() {
-        val b = body(PrintRequests.update(listOf(job("loc/1", copies = 1), job("loc/2", copies = 3)), payload, null, null))
-        assertFalse("no shared key when the jobs differ", b.containsKey("FinishingOptions"))
-        jobsOf(b.encode()).forEach { assertTrue(it.containsKey("FinishingOptions")) }
+    fun `update still writes the shared FinishingOptions when the selection agrees`() {
+        val agreeing = body(PrintRequests.update(listOf(job("loc/1"), job("loc/2")), payload, null, null))
+        assertTrue(agreeing.containsKey("FinishingOptions"))
+
+        val differing = body(
+            PrintRequests.update(listOf(job("loc/1", copies = 1), job("loc/2", copies = 3)), payload, null, null),
+        )
+        assertFalse("no shared key when the jobs differ", differing.containsKey("FinishingOptions"))
     }
 
     @Test

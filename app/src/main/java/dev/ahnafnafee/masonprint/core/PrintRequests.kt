@@ -44,10 +44,17 @@ object PrintRequests {
      * `POST /printjobs/cost` and `PATCH /printjobs/` share this body — the bundle literally uses
      * one builder for both, so a cost preview and the change that follows cannot disagree.
      *
-     * The shared `FinishingOptions`/`CostCenterCode` keys are emitted only when every selected job
-     * agrees (the bundle's `every(...)` guards); when they disagree, the per-job value is sent
-     * instead. That distinction is preserved because the server applies the top-level values to the
-     * whole request.
+     * **`FinishingOptions` goes on every job row, always.** The bundle also writes a top-level copy
+     * when the selection agrees, and this used to send *only* that copy in the agreeing case, which
+     * for one selected job is every case. GMU ignores the top-level key: probed against
+     * `PATCH /PharosAPI/printjobs` with `Copies` changed, the top-level body answers **200 and
+     * leaves the job untouched**, while the identical value inside the `PrintJobs` row answers 200
+     * and applies. Both spellings of the path behave the same, so the trailing slash the vendor docs
+     * show is not the difference. That is the whole reason a copies or duplex change appeared to do
+     * nothing: the request succeeded and changed nothing, and the 200 hid it.
+     *
+     * The top-level copy is still written when the jobs agree, because it is what the bundle does
+     * and a deployment that reads it instead is then served too. It is redundant on GMU, not wrong.
      */
     fun update(
         jobs: List<PrintJob>,
@@ -69,7 +76,7 @@ object PrintRequests {
                     buildJsonObject {
                         put("Location", job.location)
                         putStr("CostCenterCode", costCenterCode ?: job.costCenterCode)
-                        if (!shared && finishing != null) put("FinishingOptions", finishing.forJobUpdate())
+                        if (finishing != null) put("FinishingOptions", finishing.forJobUpdate())
                     }
                 },
             ),
