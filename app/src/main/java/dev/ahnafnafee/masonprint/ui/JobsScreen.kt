@@ -112,7 +112,6 @@ import androidx.compose.ui.unit.dp
 import dev.ahnafnafee.masonprint.core.AppState
 import dev.ahnafnafee.masonprint.core.CostPreview
 import dev.ahnafnafee.masonprint.core.Session
-import dev.ahnafnafee.masonprint.core.uploadProgressDetail
 import dev.ahnafnafee.masonprint.core.stillAwaitsCosting
 import dev.ahnafnafee.masonprint.data.model.CostCenter
 import dev.ahnafnafee.masonprint.data.model.Device
@@ -160,6 +159,7 @@ fun JobsScreen(
     router: Router,
     snackbar: SnackbarHostState,
     onPickDocument: () -> Unit,
+    preparingDocuments: Boolean = false,
 ) {
     var showReleased by rememberSaveable { mutableStateOf(false) }
     var fundingOpen by rememberSaveable { mutableStateOf(false) }
@@ -191,6 +191,7 @@ fun JobsScreen(
         session = session,
         router = router,
         onPickDocument = onPickDocument,
+        preparingDocuments = preparingDocuments,
         snackbar = snackbar,
         selection = QueueSelection(
             onClear = { session.clearSelection() },
@@ -230,7 +231,14 @@ fun JobsScreen(
                      * *above* the list because both of them change how a release from it should be
                      * read.
                      */
-                    state.busy?.let { BusyStrip(it) }
+                    if (state.upload == null && !preparingDocuments) {
+                        state.busy?.let { BusyStrip(it) }
+                    }
+                    UploadQueueStatus(
+                        state = state,
+                        preparing = preparingDocuments,
+                        onDismiss = session::dismissUploadIssue,
+                    )
 
                     if (state.stale) {
                         /*
@@ -265,12 +273,6 @@ fun JobsScreen(
                         onAddFunds = { router.push(Route.AddFunds) },
                     )
 
-                    if (state.upload != null) {
-                        UploadProgressBar(
-                            fraction = state.uploadFraction,
-                            detail = uploadProgressDetail(state.uploadFiles, state.uploadIndex, state.uploadFraction),
-                        )
-                    }
                 }
             }
 
@@ -302,7 +304,7 @@ fun JobsScreen(
                 )
             }
 
-            if (visible.isEmpty()) {
+            if (visible.isEmpty() && state.upload == null && !preparingDocuments && state.busy == null) {
                 item(key = "empty") {
                     QueueEmpty(
                         state = state,

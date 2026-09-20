@@ -87,15 +87,9 @@ class RouterTest {
 
     @Test
     fun `route ids are the prototype's own and stay resolvable`() {
-        // A bug report quoting "queue" or "costcenter" has to land on the same screen the design
-        // spec's §3 numbers describe, so the ids are load-bearing, not display text.
-        //
-        // 14 of these are the spec's §3 screens. Two are past the prototype: PrinterFilter, because
-        // the spec never anticipated 302 stations across ~60 buildings and picking among them needs
-        // a screen rather than a control sitting on top of the list it narrows; and Help, because the
-        // vendor's vocabulary is shared with the service desk and so can only be explained, not
-        // renamed.
-        assertEquals(17, Route.entries.size)
+        // Upload is an operation on the queue and must not remain a navigable destination.
+        assertEquals(16, Route.entries.size)
+        assertNull(Route.of("upload"))
         assertEquals(Route.Help, Route.of("help"))
         assertEquals(Route.Preview, Route.of("preview"))
         assertEquals(Route.Queue, Route.of("queue"))

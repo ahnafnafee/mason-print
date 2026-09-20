@@ -63,6 +63,7 @@ fun AppRoot(
     graph: AppGraph,
     router: Router,
     onPickDocument: () -> Unit,
+    preparingDocuments: Boolean = false,
 ) {
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -197,6 +198,7 @@ fun AppRoot(
                 router = router,
                 snackbar = snackbar,
                 onPickDocument = onPickDocument,
+                preparingDocuments = preparingDocuments,
             )
 
             Route.Diagnostics -> DiagnosticsScreen(
@@ -204,13 +206,6 @@ fun AppRoot(
                 graph = graph,
                 session = session,
                 onBack = { router.pop() },
-            )
-
-            Route.Send -> UploadSheet(
-                state = state,
-                session = session,
-                router = router,
-                onPickDocument = onPickDocument,
             )
 
             Route.Release -> ReleaseScreen(state, session, router)

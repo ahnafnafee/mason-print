@@ -69,8 +69,7 @@ internal fun uploadProgressDetail(files: List<PickedFile>, index: Int, fraction:
         else -> "the document"
     }
     val pct = (fraction.coerceIn(0f, 1f) * 100).toInt()
-    return "Uploading $which · $pct% written. Leaving this screen does not cancel it" +
-        (if (position != null) ", and the rest of the pick follows this file." else ".")
+    return if (pct == 100) "Finishing upload · $which" else "Uploading $which · $pct%"
 }
 
 /**
@@ -101,46 +100,18 @@ internal fun oversizeSentence(over: List<UploadSource>, limitBytes: Long?): Stri
     }
 }
 
-/**
- * The one honest sentence about a send that involved more than one file.
- *
- * "Uploaded" is avoided on purpose: a partial batch is the common case this exists for (one file
- * over the limit, one refused for its type), and a snackbar that says "Sent" after two of four
- * documents arrived is how a student finds out at the printer that two assignments did not. Names
- * are listed rather than counted when the batch got refused, because the user has to know *which*.
- */
+/** A short completion notice; unconfirmed file names remain available in the queue's issue card. */
 internal fun batchSummary(
     sent: List<String>,
     refused: List<String>,
     notSentForSize: List<String>,
     notAttempted: List<String> = emptyList(),
-    stoppedEarly: Boolean = notAttempted.isNotEmpty(),
 ): String {
     val total = sent.size + refused.size + notSentForSize.size + notAttempted.size
-    val untouched = refused.isEmpty() && notSentForSize.isEmpty() && notAttempted.isEmpty()
     return when {
         total == 0 -> "Nothing was uploaded."
-
-        untouched -> if (total == 1) "Sent ${sent.first()}" else "Sent ${sent.size} documents"
-
-        sent.isEmpty() && total == 1 ->
-            "Nothing was uploaded from ${(refused + notSentForSize + notAttempted).first()}."
-
-        sent.isEmpty() -> {
-            val parts = buildList {
-                if (refused.isNotEmpty()) add("${refused.size} refused by the server")
-                if (notSentForSize.isNotEmpty()) add("${notSentForSize.size} over the size limit")
-                if (notAttempted.isNotEmpty()) add("${notAttempted.size} never attempted")
-            }
-            "Nothing was uploaded: ${parts.joinToString(" and ")}. The files are still on your phone."
-        }
-
-        else -> buildString {
-            append("Sent ${sent.size} of $total documents")
-            if (refused.isNotEmpty()) append(" · not sent: ").append(refused.joinToString(", "))
-            if (notSentForSize.isNotEmpty()) append(" · over the limit: ").append(notSentForSize.joinToString(", "))
-            if (notAttempted.isNotEmpty()) append(" · not attempted: ").append(notAttempted.joinToString(", "))
-            if (stoppedEarly) append("; the upload stopped early")
-        }
+        sent.isEmpty() -> "No uploads were confirmed. Check the queue."
+        sent.size == total -> if (total == 1) "1 document added to queue" else "$total documents added to queue"
+        else -> "${sent.size} of $total documents added to queue"
     }
 }

@@ -109,10 +109,10 @@ class MainActivity : ComponentActivity() {
             MasonPrintTheme(darkTheme = dark) {
                 val state by session.state.collectAsState()
                 val router = remember { Router(Route.Campus) }
-                LaunchedEffect(state.phase, state.busy, sharedUris, pendingCode, preparingShare) {
-                    if (state.signedIn && state.busy == null && !preparingShare) {
+                LaunchedEffect(state.phase, state.busy, state.upload, sharedUris, pendingCode, preparingShare) {
+                    if (state.signedIn && state.busy == null && state.upload == null && !preparingShare) {
                         if (sharedUris.isNotEmpty()) {
-                            router.push(Route.Send)
+                            router.reset(Route.Queue)
                             submit(sharedUris)
                         } else {
                             pendingCode?.let { token ->
@@ -134,8 +134,8 @@ class MainActivity : ComponentActivity() {
                     state = state,
                     graph = graph,
                     router = router,
+                    preparingDocuments = preparingShare,
                     onPickDocument = {
-                        router.push(Route.Send)
                         picker.launch(arrayOf("*/*"))
                     },
                 )
@@ -230,7 +230,8 @@ class MainActivity : ComponentActivity() {
                     uris.mapNotNull { UploadFactory.fromUri(this@MainActivity, it) }
                 }
                 // A sign-out or another upload may have started while the provider was opening.
-                if (!session.state.value.signedIn || session.state.value.busy != null) return@launch
+                val current = session.state.value
+                if (!current.signedIn || current.busy != null || current.upload != null) return@launch
                 if (sources.isNotEmpty()) session.uploadAll(sources)
                 sharedUris = sharedUris - uris.toSet()
                 if (sources.size != uris.size) {

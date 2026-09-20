@@ -36,9 +36,6 @@ enum class Route(val id: String) {
     /** The held-job queue. Prototype §3.5. */
     Queue("queue"),
 
-    /** Choose a file, set finishing, pick who pays. Prototype §3.6. */
-    Send("upload"),
-
     /** Look at a held document before spending money on it. */
     Preview("preview"),
 

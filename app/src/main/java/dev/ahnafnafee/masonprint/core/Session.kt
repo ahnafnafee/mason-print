@@ -100,28 +100,29 @@ data class AppState(
      * The documents this device handed the app for the current — or, once finished, the most recent —
      * send, in the order they are sent.
      *
-     * Android's picker returns a *list* now, and the sheet cannot reconstruct one from
+     * Android's picker returns a list, which cannot be reconstructed from
      * `persistedUriPermissions`, which holds every file ever granted and carries no batch. So the
      * batch is recorded here, by the code that actually received it. Kept after the transfer ends so
-     * the sheet can show one honest row per document instead of one guessed row.
+     * the queue can identify documents needing attention after a partial upload.
      */
     val uploadFiles: List<PickedFile> = emptyList(),
     /** 1-based position within [uploadFiles] of the file now transferring; 0 when nothing is. */
     val uploadIndex: Int = 0,
     /**
-     * Names from [uploadFiles] that did **not** become a job — refused by the server, held back for
-     * its size, or never attempted because the send stopped.
+     * Names from [uploadFiles] without confirmed success — refused by the server, held back for
+     * size, never attempted, or left unconfirmed by a lost response.
      *
-     * Kept as names because that is the only identity the queue can be checked against: the server
-     * titles a job from the file, so `uploadFiles` minus this list, intersected with the queue, is
-     * the whole truth the file card needs.
+     * Keep the attempted names for an actionable issue list. A lost response is unconfirmed:
+     * neither a matching old job name nor a timeout proves what happened to this upload.
      */
     val uploadNotSent: List<String> = emptyList(),
-    /** The file [failure] is about, when the failure came from a multi-file send. */
+    /** The file [uploadFailure] is about when exactly one attempted upload failed. */
     val uploadFailedFile: PickedFile? = null,
+    /** Kept separately so refreshing the queue cannot erase the last upload issue. */
+    val uploadFailure: PharosFailure? = null,
     val failure: PharosFailure? = null,
     val notice: String? = null,
-    /** What the snackbar offers next, if anything. `View` after an upload, `Retry` after a refusal. */
+    /** What the snackbar offers next, if anything, such as reviewing a refused release. */
     val noticeAction: SnackAction? = null,
     /**
      * Locations of the jobs the user has selected, in [PrintJob.location] terms.
@@ -147,9 +148,6 @@ data class AppState(
     val outcome: ReleaseOutcome? = null,
 ) {
     val signedIn: Boolean get() = phase == Phase.Ready && user != null
-
-    /** `2 of 4` while a multi-file send is in flight, null for a single file or when idle. */
-    val uploadPosition: String? get() = batchPosition(uploadIndex, uploadFiles.size)
 
     /** The selected jobs, in queue order. Everything downstream of a selection reads it through here. */
     val chosen: List<PrintJob> get() = jobs.filter { it.location in selection }
@@ -747,7 +745,8 @@ class Session(private val graph: AppGraph) {
                     uploadIndex = 0,
                     uploadNotSent = files.map { f -> f.name },
                     uploadFailedFile = files.singleOrNull(),
-                    failure = PharosFailure.TooLarge(limit, oversizeSentence(plan.overLimit, limit), locallyGated = true),
+                    uploadFailure = PharosFailure.TooLarge(limit, oversizeSentence(plan.overLimit, limit), locallyGated = true),
+                    failure = null,
                 )
             }
             return
@@ -761,6 +760,21 @@ class Session(private val graph: AppGraph) {
             .forEach { MpLog.warn("upload", "extension .${it.extension} is not in the vendor allowlist") }
 
         val sending = plan.send
+        // Reserve the upload before launching so the queue shows progress immediately and another
+        // picker/share callback cannot start a second batch during coroutine dispatch.
+        _state.update {
+            it.copy(
+                upload = UploadProgress(),
+                uploadFraction = 0f,
+                uploadFiles = files,
+                uploadIndex = sources.indexOf(sending.first()) + 1,
+                uploadNotSent = plan.overLimit.map { source -> source.fileName },
+                uploadFailedFile = null,
+                uploadFailure = null,
+                failure = null,
+                busy = sendingLabel(sending.first().fileName, 1, sending.size),
+            )
+        }
         scope.launch {
             val finishing = settings?.defaultFinishing() ?: FinishingPayload.from(null)
             val body = PrintRequests.metaData(finishing, _state.value.selectedDevice?.location)
@@ -812,12 +826,12 @@ class Session(private val graph: AppGraph) {
             val skippedForSize = plan.overLimit.map { it.fileName }
             val summary = batchSummary(sent, refused, skippedForSize, notAttempted)
             /*
-             * Name the files, keep the server's own words on screen, and re-read the queue once at
+             * Preserve the upload issue separately from refresh failures, and re-read the queue at
              * the end. A status code alone is not enough to act on: when GMU answered a real upload
              * with `405` (wrong URL — see [dev.ahnafnafee.masonprint.data.net.uploadUrl]), the queue still said
              * "0 on the server", and the only way a student could tell that nothing had arrived was
-             * to pull to refresh themselves. `refresh` keeps the failure ([refresh] deliberately
-             * preserves it) and replaces the remembered queue with whatever the server actually
+             * to pull to refresh themselves. The separate uploadFailure survives a refresh that
+             * fails too, while the remembered queue is replaced with whatever the server actually
              * holds. One refresh for the whole batch, not one per file: each is a full page of jobs.
              */
             _state.update {
@@ -829,11 +843,17 @@ class Session(private val graph: AppGraph) {
                     // the card would quote the last refusal while pretending it covered both.
                     uploadFailedFile = failedFile.takeIf { f -> refused.size == 1 },
                     busy = null,
-                    failure = if (refused.isEmpty()) null else lastFailure,
+                    uploadFailure = if (refused.isEmpty()) {
+                        if (plan.overLimit.isEmpty()) null else PharosFailure.TooLarge(limit, null, locallyGated = true)
+                    } else lastFailure,
+                    // Certificate approval still uses the shared trust prompt. Do not let an
+                    // immediate refresh replace the pending certificate with another failure.
+                    failure = (lastFailure as? PharosFailure.TlsNotTrusted) ?: it.failure,
                     notice = summary,
+                    noticeAction = null,
                 )
             }
-            refresh()
+            if (lastFailure !is PharosFailure.TlsNotTrusted) refresh()
         }
     }
 
@@ -1292,9 +1312,9 @@ class Session(private val graph: AppGraph) {
 
     fun deleteJobs(jobs: List<PrintJob>) {
         val target = graph.target ?: return
-        if (jobs.isEmpty()) return
+        if (jobs.isEmpty() || _state.value.busy != null || _state.value.upload != null) return
+        _state.update { it.copy(busy = "Deleting ${jobs.size} job(s)") }
         scope.launch {
-            _state.update { it.copy(busy = "Deleting ${jobs.size} job(s)") }
             when (val result = graph.api.deleteJobs(target, PrintRequests.delete(jobs))) {
                 is ApiResult.Err -> _state.update { it.copy(busy = null, failure = result.failure) }
                 is ApiResult.Ok -> {
@@ -1461,6 +1481,12 @@ class Session(private val graph: AppGraph) {
     }
 
     fun dismissFailure() = _state.update { it.copy(failure = null) }
+
+    fun dismissUploadIssue() = _state.update {
+        if (it.upload != null) it else it.copy(
+            uploadNotSent = emptyList(), uploadFailedFile = null, uploadFailure = null,
+        )
+    }
 
     fun dismissNotice(expected: String? = _state.value.notice) = _state.update {
         if (it.notice == expected) it.copy(notice = null, noticeAction = null) else it

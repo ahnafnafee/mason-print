@@ -74,6 +74,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -204,6 +206,7 @@ internal fun QueueScaffold(
     onPickDocument: () -> Unit,
     selection: QueueSelection,
     snackbar: SnackbarHostState,
+    preparingDocuments: Boolean = false,
     content: @Composable (contentPadding: PaddingValues) -> Unit,
 ) {
     val reduced = rememberReducedMotion()
@@ -211,10 +214,8 @@ internal fun QueueScaffold(
     var menuOpen by rememberSaveable { mutableStateOf(false) }
 
     val selecting = state.selection.isNotEmpty()
-    // `busy` is the session's one honest "something is in flight" flag, and every string it carries is
-    // a progress sentence (`Refreshing`, `Deleting 2 job(s)`). Pull-to-refresh holds its spinner while
-    // it is true, which is the desired behaviour for all of them.
-    val refreshing = state.busy != null
+    // Uploads have their own progress in the list, so they do not also need a refresh spinner.
+    val refreshing = state.busy != null && state.upload == null && !preparingDocuments
 
     Scaffold(
         /*
@@ -280,7 +281,7 @@ internal fun QueueScaffold(
          */
         floatingActionButton = {
             AnimatedVisibility(
-                visible = !selecting,
+                visible = !selecting && state.upload == null && !preparingDocuments,
                 enter = fadeIn(if (reduced) snap() else MaterialTheme.motionScheme.defaultEffectsSpec()) +
                     scaleIn(if (reduced) snap() else MaterialTheme.motionScheme.defaultSpatialSpec()),
                 exit = fadeOut(if (reduced) snap() else MaterialTheme.motionScheme.fastEffectsSpec()) +
@@ -288,6 +289,7 @@ internal fun QueueScaffold(
             ) {
                 ExtendedFloatingActionButton(
                     onClick = onPickDocument,
+                    modifier = Modifier.semantics { contentDescription = "Upload documents" },
                     containerColor = currentMasonColors.barAction,
                     contentColor = currentMasonColors.onBarAction,
                     icon = { Icon(Icons.Filled.UploadFile, null) },
@@ -549,6 +551,7 @@ private fun QueueSelectionBar(
                             )
                             DropdownMenuItem(
                                 text = { Text("Delete") },
+                                enabled = state.busy == null && state.upload == null,
                                 leadingIcon = { Icon(Icons.Filled.Delete, null) },
                                 onClick = { moreActionsOpen = false; selection.onDelete() },
                             )

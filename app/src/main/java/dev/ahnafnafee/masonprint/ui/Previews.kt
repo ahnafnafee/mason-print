@@ -13,6 +13,7 @@ import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Print
 import androidx.compose.material3.Button
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -125,7 +126,7 @@ private fun MasonComponentGallery(dark: Boolean) {
                 }
                 MoneyText("$1.20")
             }
-            UploadProgressBar(fraction = 0.42f, detail = "6.1 of 14.5 MB")
+            LinearProgressIndicator(progress = { 0.42f }, modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.height(2.dp))
             MasonHairline()
 

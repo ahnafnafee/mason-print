@@ -1,7 +1,6 @@
 package dev.ahnafnafee.masonprint.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,7 +22,6 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -34,7 +32,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -266,33 +263,6 @@ internal fun RowAvatar(
         contentColor = fg,
     ) {
         Box(contentAlignment = Alignment.Center) { Icon(icon, null, modifier = Modifier.size((size / 2).dp)) }
-    }
-}
-
-/**
- * Upload progress: bytes moved, per cent, and the fraction. A 4 dp hairline next to a 50 MB upload
- * crawling over campus Wi-Fi does not answer the only question being asked.
- */
-@Composable
-internal fun UploadProgressBar(fraction: Float, detail: String? = null) {
-    if (fraction <= 0f) return
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Box(
-            Modifier.weight(1f)
-                .height(10.dp)
-                .clip(RoundedCornerShape(5.dp)),
-        ) {
-            LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth())
-        }
-        Text(
-            detail ?: "${(fraction * 100).toInt()}%",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 

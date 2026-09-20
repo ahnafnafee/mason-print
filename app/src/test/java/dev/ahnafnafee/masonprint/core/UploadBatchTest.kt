@@ -110,7 +110,7 @@ class UploadBatchTest {
     @Test
     fun `the progress line of a single file does not pretend there is a batch`() {
         val detail = uploadProgressDetail(listOf(PickedFile("essay.pdf", "application/pdf", 1_670_000L)), 1, 0.4f)
-        assertEquals("Uploading essay.pdf · 40% written. Leaving this screen does not cancel it.", detail)
+        assertEquals("Uploading essay.pdf · 40%", detail)
     }
 
     @Test
@@ -121,16 +121,14 @@ class UploadBatchTest {
             PickedFile("c.pdf", "application/pdf", 1L),
         )
         val detail = uploadProgressDetail(files, 2, 1f)
-        assertTrue(detail, detail.startsWith("Uploading file 2 of 3 · b.pdf · 100% written."))
-        // The sentence has to promise the rest is coming, or a bar that resets to 0% on file 3 looks
-        // like the send restarted or failed.
-        assertTrue(detail, detail.contains("the rest of the pick follows this file"))
+        assertEquals("Finishing upload · file 2 of 3 · b.pdf", detail)
+        assertFalse("Writing all bytes is not confirmation of queue arrival", detail.contains("added to queue"))
     }
 
     @Test
     fun `a fraction cannot run past the bar it is describing`() {
         val files = listOf(PickedFile("a.pdf", "application/pdf", 1L))
-        assertTrue(uploadProgressDetail(files, 1, 1.8f).contains("100%"))
+        assertTrue(uploadProgressDetail(files, 1, 1.8f).startsWith("Finishing upload"))
         assertTrue(uploadProgressDetail(files, 1, -0.5f).contains("0%"))
     }
 
@@ -203,54 +201,21 @@ class UploadBatchTest {
 
     @Test
     fun `a whole batch that arrived`() {
-        assertEquals("Sent essay.pdf", batchSummary(listOf("essay.pdf"), emptyList(), emptyList()))
-        assertEquals("Sent 3 documents", batchSummary(listOf("a.pdf", "b.pdf", "c.pdf"), emptyList(), emptyList()))
+        assertEquals("1 document added to queue", batchSummary(listOf("essay.pdf"), emptyList(), emptyList()))
+        assertEquals("3 documents added to queue", batchSummary(listOf("a.pdf", "b.pdf", "c.pdf"), emptyList(), emptyList()))
     }
 
     @Test
-    fun `a single file that was refused names nothing else`() {
-        assertEquals(
-            "Nothing was uploaded from essay.pdf.",
-            batchSummary(emptyList(), listOf("essay.pdf"), emptyList()),
-        )
+    fun `an unconfirmed response does not assert the document never arrived`() {
+        assertEquals("No uploads were confirmed. Check the queue.", batchSummary(emptyList(), listOf("a.pdf"), emptyList()))
     }
 
     @Test
-    fun `a batch where nothing arrived separates the two reasons`() {
-        val summary = batchSummary(emptyList(), listOf("a.pdf"), listOf("b.pdf", "c.pdf"))
-        assertEquals(
-            "Nothing was uploaded: 1 refused by the server and 2 over the size limit. " +
-                "The files are still on your phone.",
-            summary,
-        )
-    }
-
-    @Test
-    fun `a partial batch names the files that did not arrive`() {
-        val summary = batchSummary(listOf("a.pdf", "b.pdf"), listOf("c.pdf"), listOf("d.pdf"))
-        assertEquals("Sent 2 of 4 documents · not sent: c.pdf · over the limit: d.pdf", summary)
-    }
-
-    @Test
-    fun `files never attempted after a stopped batch are counted separately from refusals`() {
-        val summary = batchSummary(listOf("a.pdf"), listOf("b.pdf"), emptyList(), listOf("c.pdf", "d.pdf"))
-        assertEquals("Sent 1 of 4 documents · not sent: b.pdf · not attempted: c.pdf, d.pdf; the upload stopped early", summary)
-    }
-
-    @Test
-    fun `an explicitly passed stoppedEarly still says so with nothing else outstanding`() {
-        val summary = batchSummary(listOf("a.pdf"), emptyList(), emptyList(), listOf("b.pdf"), stoppedEarly = true)
-        assertTrue(summary, summary.endsWith("; the upload stopped early"))
-    }
-
-    @Test
-    fun `nothing arrived and some were never attempted`() {
-        val summary = batchSummary(emptyList(), listOf("a.pdf"), emptyList(), listOf("b.pdf"))
-        assertEquals(
-            "Nothing was uploaded: 1 refused by the server and 1 never attempted. " +
-                "The files are still on your phone.",
-            summary,
-        )
+    fun `partial success counts refused oversized and unattempted documents`() {
+        assertEquals("2 of 5 documents added to queue",
+            batchSummary(listOf("a.pdf", "b.pdf"), listOf("c.pdf"), listOf("d.pdf"), listOf("e.pdf")))
+        assertEquals("No uploads were confirmed. Check the queue.",
+            batchSummary(emptyList(), listOf("a.pdf"), listOf("b.pdf"), listOf("c.pdf")))
     }
 
     // ------------------------------------------------------------------ the value the UI can hold --
