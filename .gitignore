@@ -3,6 +3,7 @@
 build/
 local.properties
 .kotlin/
+__pycache__/
 
 # IDE
 .idea/

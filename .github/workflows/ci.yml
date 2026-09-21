@@ -21,6 +21,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Test release-note generation
+        run: python3 -m unittest discover -s scripts/tests -v
+
       - name: Set up JDK 17
         uses: actions/setup-java@v6
         with:

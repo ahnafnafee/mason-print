@@ -36,9 +36,10 @@ on:
         type: boolean
         default: false
       notes:
-        description: 'Required user-facing release notes: explain what changed, which problems were fixed, and any upgrade steps. Markdown supported.'
-        required: true
+        description: 'Optional custom release notes. Leave blank to generate summaries from commits since the previous release.'
+        required: false
         type: string
+        default: ''
 
 permissions:
   contents: write # create the tag and the release
@@ -56,15 +57,6 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0 # need full history + tags for version validation and release notes
-
-      - name: Validate release notes
-        env:
-          RELEASE_NOTES: ${{ inputs.notes }}
-        run: |
-          if [[ ! "$RELEASE_NOTES" =~ [^[:space:]] ]]; then
-            echo "::error::Write user-facing release notes before publishing. See docs/releases/README.md."
-            exit 1
-          fi
 
       - name: Validate version & derive versionCode
         id: ver
@@ -99,8 +91,21 @@ jobs:
             echo "version_name=$ver"
             echo "version_code=$code"
             echo "tag=v$ver"
+            echo "previous_tag=${latest:+v$latest}"
           } >> "$GITHUB_OUTPUT"
           echo "Releasing v$ver (versionCode $code). Previous latest: v${latest:-none}"
+
+      - name: Generate release notes
+        env:
+          RELEASE_NOTES: ${{ inputs.notes }}
+          PREVIOUS_TAG: ${{ steps.ver.outputs.previous_tag }}
+          RELEASE_TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          python3 scripts/generate_release_notes.py \
+            --previous-tag "$PREVIOUS_TAG" \
+            --tag "$RELEASE_TAG" \
+            --repository-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --output build/release-notes.md
 
       # Fail before the minutes-long build when the release credentials are incomplete.
       - name: Preflight signing prerequisites
@@ -211,9 +216,9 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           name: Mason Print v${{ steps.ver.outputs.version_name }}
-          body: ${{ inputs.notes }}
-          generate_release_notes: true
+          body_path: build/release-notes.md
           prerelease: ${{ inputs.prerelease }}
           files: ${{ steps.artifacts.outputs.apk }}
           fail_on_unmatched_files: true
