@@ -31,11 +31,13 @@ Send documents from your phone, walk to any campus printer, scan its code, and p
   </tr>
   <tr>
     <td><img src="docs/screenshots/signin.png" width="200" alt="Sign-in screen with the George Mason wordmark, a card explaining that you pay at the printer, and username and password fields" /></td>
-    <td><img src="docs/screenshots/queue.png" width="200" alt="Print queue showing the printing balance and three held documents, each with its sheet and page count and the price it will cost at release" /></td>
-    <td><img src="docs/screenshots/printers.png" width="200" alt="Printer picker with tabs for browsing, scanning a code and typing a code, listing campus printers grouped by building and floor" /></td>
+    <td><img src="docs/screenshots/queue.png" width="200" alt="Print queue with a shared funding banner, three held documents, estimated prices, colour and sidedness labels, and Preview buttons" /></td>
+    <td><img src="docs/screenshots/printers.png" width="200" alt="Printer picker filtered to Johnson Center, showing its Fairfax street address, printer rooms, favourite controls, and tabs for scanning or typing a code" /></td>
     <td><img src="docs/screenshots/queue-dark.png" width="200" alt="The same print queue rendered in the dark theme" /></td>
   </tr>
 </table>
+
+<sub>Screenshots use sample documents and balances.</sub>
 
 </div>
 
