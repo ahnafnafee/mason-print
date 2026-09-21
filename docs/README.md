@@ -22,3 +22,4 @@ states the constraint before it cites the source.
 
 - `assets/` - the app icon, used by the README.
 - `DESIGN-PROMPT.md` - the brief the redesign was produced from.
+- `releases/` - version-specific release notes and guidance for future releases.

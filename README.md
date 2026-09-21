@@ -239,7 +239,7 @@ keyPassword=...
 
 ## 🚀 Cutting a release
 
-Releases are manual. Run the **Release** workflow from the Actions tab, give it a semver version, and optionally some notes to sit above the generated commit list.
+Releases are manual. Run the **Release** workflow from the Actions tab with a semver version and user-facing release notes. Explain what changed for someone using the app, including relevant fixes and any upgrade steps. The workflow rejects blank notes before building; the generated changelog follows the written summary. See the [release-note archive and writing guide](docs/releases/README.md) for examples.
 
 The workflow refuses the version if it is not `MAJOR.MINOR.PATCH`, if that tag already exists, or if it is not strictly higher than the latest one. `versionCode` is derived as `MAJOR*10000 + MINOR*100 + PATCH`, so it cannot go backwards. That matters more here than it would on Play: Android refuses to install an APK whose `versionCode` is below the installed one, and a sideloaded app has nothing else keeping upgrades in order.
 
