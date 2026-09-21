@@ -88,7 +88,9 @@ class RouterTest {
     @Test
     fun `route ids are the prototype's own and stay resolvable`() {
         // Upload is an operation on the queue and must not remain a navigable destination.
-        assertEquals(16, Route.entries.size)
+        assertEquals(18, Route.entries.size)
+        assertEquals(Route.ReleasedJobs, Route.of("released-jobs"))
+        assertEquals(Route.PrinterJobs, Route.of("printer-jobs"))
         assertNull(Route.of("upload"))
         assertEquals(Route.Help, Route.of("help"))
         assertEquals(Route.Preview, Route.of("preview"))

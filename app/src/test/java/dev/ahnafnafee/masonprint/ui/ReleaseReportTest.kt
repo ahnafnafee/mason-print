@@ -73,6 +73,9 @@ class ReleaseReportTest {
         val text = releaseReportText(offline, "h", null, ::nameFromLocation)
         assertTrue(text, text.contains("No answer from the server: Nothing answered at that address"))
         assertTrue(text, text.contains("Balance: — → —"))
+        assertTrue(text, text.contains("unconfirmed 2"))
+        assertFalse(text, text.contains("Refused:"))
+        assertFalse(text, text.contains("Not charged"))
     }
 
     @Test

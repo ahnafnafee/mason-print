@@ -7,7 +7,7 @@
 # Mason Print
 
 A fast, native Android client for George Mason University's Pay-for-Print service.<br/>
-Send documents from your phone, walk to any campus printer, scan its code, and pay only for the pages that actually come out.
+Send documents from your phone, walk to a campus printer, and scan its code to release your selected jobs.
 
 **[Releases][releases-link]** · [Building from source](#%EF%B8%8F-building-from-source) · [Report an issue][issues-link]
 
@@ -102,6 +102,12 @@ Independent of the system setting, because the app's theme is its own choice. Th
 
 Every request, its status, and the server's own wording for a failure. When a campus server answers HTTP 300 for a wrong password, or 401 for a route that does not exist, the screen says what happened rather than translating it into something friendlier and less true.
 
+### `10` Follow a release and check printer jobs
+
+Open **Released jobs and printer status** from the queue to find up to 100 local release receipts. An accepted release says **Sent · completion unknown** until the server reports more; a missing queue row never counts as proof of printing. Receipts are encrypted when saved and cleared at sign-out. While the app is visible, Pharos notifications refresh the queue, with manual refresh and upload analysis polling still available.
+
+**Check a printer** can read its pending jobs through an IPP/IPPS address supplied by print support. Jobs are filtered to the entered printer username. Cancellation appears only when the printer advertises support and supplies a stable job UUID; the app rechecks the exact job before sending one cancellation request. This direct connection is optional and has been tested with simulated printers, not GMU's physical printers. It requires a reachable endpoint and whatever access the printer permits. See [printer status setup and limits](docs/PRINTER-STATUS.md).
+
 <div align="right">
 
 [![][back-to-top]](#readme-top)
@@ -128,9 +134,9 @@ Requires **Android 8.0 (API 26)** or newer. The release APK is about 3 MB and un
 Worth knowing before you use it, because the money moves later than most people expect.
 
 1. **Send.** The document uploads to the print server and joins your queue. Nothing is charged.
-2. **Wait a moment.** The server converts it, counts the pages, and prices it. The queue re-checks for a short while on its own, since Pharos never pushes an update when a job finishes being priced.
+2. **Wait a moment.** The server converts it, counts the pages, and prices it. The queue listens for changes while the app is visible and also rechecks documents still being processed.
 3. **Choose.** Select the jobs you want and pick a funding source: your own balance, or a department cost center if you have one.
-4. **Release.** At the printer, scan its code. The pages come out and **that** is when you are charged.
+4. **Release.** At the printer, scan its code and confirm the selected jobs. The result reports the server's acknowledgement and balance; check printer status separately if the pages have not appeared.
 
 Deleting a job before you release it costs nothing, because nothing was ever spent.
 
@@ -160,13 +166,13 @@ Three permissions, and that is the whole list.
 
 | Permission | Why |
 | --- | --- |
-| `INTERNET` | Talk to your campus print server. There is no other network destination. |
+| `INTERNET` | Talk to your campus print server and, if configured, a printer's IPP endpoint. |
 | `ACCESS_NETWORK_STATE` | Tell "you are offline" apart from "the server refused you". |
 | `CAMERA` | Scan the code on a printer. Declared optional, so a phone without a camera still installs, and the app works without ever granting it. |
 
-There is no analytics SDK, no crash reporter, no ad library, and no `com.android.vending.BILLING`. The app has exactly one server to talk to, and it is your campus's.
+There is no analytics SDK, no crash reporter, no ad library, and no `com.android.vending.BILLING`. Printer monitoring uses a separate connection with no Pharos cookies or campus credentials. An explicitly entered printer password is sent only over IPPS and retained only while its screen is open.
 
-Your username, password, and session cookies live in `EncryptedSharedPreferences` (AES-256-GCM with the key held by the Android keystore), and backup and device transfer are switched off for that file. On the handful of OEM builds where the encrypted store throws after a key invalidation, the app degrades to private storage rather than refusing to launch, and says so on the Diagnostics screen instead of quietly weakening itself.
+Saved credentials, session cookies, and release receipts use `EncryptedSharedPreferences` (AES-256-GCM with the key held by the Android keystore), with backup and device transfer disabled. If encrypted storage is unavailable, these records are not persisted, and Diagnostics reports the problem.
 
 Campus print servers are often served with internally issued certificates. Rather than accept every certificate silently, the app prompts once with the fingerprint and records your decision.
 

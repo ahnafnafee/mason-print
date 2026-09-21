@@ -54,6 +54,10 @@ enum class Route(val id: String) {
     /** What actually happened, per job. Prototype §3.9. */
     Result("result"),
 
+    /** Local release receipts and optional direct printer status. */
+    ReleasedJobs("released-jobs"),
+    PrinterJobs("printer-jobs"),
+
     /** Balance, purses, transactions, what the server allows. Prototype §3.10. */
     Account("account"),
 

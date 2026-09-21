@@ -34,6 +34,9 @@ import dev.ahnafnafee.masonprint.core.Session
 import dev.ahnafnafee.masonprint.core.SnackAction
 import dev.ahnafnafee.masonprint.data.net.PharosFailure
 import kotlinx.coroutines.launch
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 
 /**
  * The root of the app: one back stack, one snackbar host, and a switch over [Route].
@@ -68,6 +71,14 @@ fun AppRoot(
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
+    val lifecycle = LocalLifecycleOwner.current
+
+    LaunchedEffect(state.signedIn, state.host, state.user?.accountKey, lifecycle) {
+        if (state.signedIn) lifecycle.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            session.watchQueueChanges()
+        }
+    }
+    LaunchedEffect(state.host, state.user?.accountKey) { PrinterJobsHandoff.clear() }
 
     // Building keys belong to a server; a previous campus must not hide another server's printers.
     LaunchedEffect(state.host) { ReleaseHandoff.clearFilter() }
@@ -214,6 +225,8 @@ fun AppRoot(
             Route.Preview -> PreviewScreen(state, session, onBack = { router.pop() })
             Route.Confirm -> ConfirmRelease(state, session, router)
             Route.Result -> ReleaseResult(state, session, router)
+            Route.ReleasedJobs -> ReleasedJobsScreen(state, session, router)
+            Route.PrinterJobs -> PrinterJobsScreen(state, graph, onBack = { router.pop() })
 
             Route.Account -> AccountScreen(state, session, graph, router)
             Route.CostCenters -> CostCentersScreen(state, session, router)

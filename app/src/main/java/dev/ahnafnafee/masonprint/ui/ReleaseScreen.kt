@@ -1167,12 +1167,10 @@ fun ReleaseResult(
                         )
                         Text(
                             when {
-                                transport != null -> transport.detailLine()
-                                    ?: "${outcome.printer} · nothing was charged; the jobs are " +
-                                        "still in your queue."
+                                transport != null -> "The release could not be confirmed. Check released jobs and your balance before trying again."
 
                                 outcome.refused.isEmpty() ->
-                                    "${outcome.printer} · every selected job moved."
+                                    "${outcome.printer} · the server accepted the release. Printing is not yet confirmed."
 
                                 else -> {
                                     val k = outcome.refused.size
@@ -1196,7 +1194,7 @@ fun ReleaseResult(
                     tone = MasonTone.Ok,
                     name = job?.name ?: outcome.releasedNames[loc] ?: loc.substringAfterLast('/'),
                     amount = job?.let { releaseMoney(state, it.cost) },
-                    line = "Released.",
+                    line = "Release accepted · printing not confirmed.",
                 )
             }
             outcome.refused.forEach { rj ->
@@ -1206,11 +1204,12 @@ fun ReleaseResult(
                     tone = MasonTone.Error,
                     name = rj.name,
                     amount = null,
-                    chip = "Not charged",
+                    chip = if (transport != null) "Unconfirmed" else "Refused",
                     // The server's sentence, verbatim inside quotes — the prototype's exact frame.
                     // Client prose never fronts a server-supplied one (§7.1 #1); GMU's own
                     // JobRelease_JobsFailedCosting line wins over anything this app could say.
-                    line = if (reason != null) "Refused. The server said: “$reason”"
+                    line = if (transport != null) "No release acknowledgement. Check the printer before trying again."
+                    else if (reason != null) "Refused. The server said: “$reason”"
                     else "Refused. The server gave no reason for this job. Ask the service desk.",
                 )
             }
@@ -1244,6 +1243,13 @@ fun ReleaseResult(
                 onClick = acknowledge,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
             ) { Text("Back to the queue") }
+            FilledTonalButton(
+                onClick = {
+                    session.clearOutcome()
+                    router.reset(Route.Queue)
+                    router.push(Route.ReleasedJobs)
+                }, modifier = Modifier.fillMaxWidth(),
+            ) { Text("View released jobs") }
             OutlinedButton(
                 onClick = {
                     clipboard.setText(
@@ -1327,7 +1333,7 @@ internal fun releaseReportText(
     appendLine("Printer: ${outcome.printer}")
     appendLine(
         "Requested ${outcome.requested} · released ${outcome.released.size} · " +
-            "refused ${outcome.refused.size}",
+            "${if (outcome.transport == null) "refused" else "unconfirmed"} ${outcome.refused.size}",
     )
     appendLine("Asked to charge: ${outcome.fundingIntent}")
     appendLine("Balance: ${outcome.balanceBefore ?: "—"} → ${outcome.balanceAfter ?: "—"}")
@@ -1337,9 +1343,9 @@ internal fun releaseReportText(
         outcome.released.forEach { appendLine("- ${nameFor(it)}") }
     }
     if (outcome.refused.isNotEmpty()) {
-        appendLine("Refused:")
+        appendLine(if (outcome.transport == null) "Refused:" else "Release unconfirmed:")
         outcome.refused.forEach {
-            appendLine("- ${it.name}: ${it.reason ?: "no reason given by the server"}")
+            appendLine("- ${it.name}: ${if (outcome.transport != null) "check printer status before retrying" else it.reason ?: "no reason given by the server"}")
         }
     }
 }.trimEnd()

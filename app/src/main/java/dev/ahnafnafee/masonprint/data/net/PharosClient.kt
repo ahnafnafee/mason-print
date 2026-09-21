@@ -62,6 +62,12 @@ class PharosClient(
 
     @Volatile var credentials: Credentials? = null
     @Volatile var apiVersion: String? = null
+    private val notifications by lazy { PharosNotifications(http) }
+
+    suspend fun watchQueueChanges(target: PharosTarget, onChanged: suspend () -> Unit) {
+        val header = credentials?.headerValue ?: return
+        notifications.watch(target, { header }, onChanged)
+    }
 
     // ---------------------------------------------------------------- discovery
 

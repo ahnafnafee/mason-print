@@ -146,6 +146,7 @@ data class AppState(
     val transactionsFailure: PharosFailure? = null,
     /** Per-job outcome of the release that just happened, for the Result screen. */
     val outcome: ReleaseOutcome? = null,
+    val releaseHistory: List<ReleaseRecord> = emptyList(),
 ) {
     val signedIn: Boolean get() = phase == Phase.Ready && user != null
 
@@ -279,6 +280,46 @@ class Session(private val graph: AppGraph) {
         ),
     )
     val state: StateFlow<AppState> = _state
+    private var notificationJob: Job? = null
+
+    /** Called only while the signed-in app is in the foreground. Coalesce notifications during work. */
+    suspend fun watchQueueChanges() {
+        val target = graph.target ?: return
+        val account = _state.value.user?.accountKey ?: return
+        val watcher = kotlinx.coroutines.currentCoroutineContext().job
+        notificationJob?.cancelAndJoin()
+        notificationJob = watcher
+        try {
+            graph.api.watchQueueChanges(target) {
+                delay(700)
+                while (_state.value.busy != null || _state.value.upload != null) delay(500)
+                if (_state.value.signedIn && graph.target === target && _state.value.user?.accountKey == account) refresh()
+            }
+        } finally {
+            if (notificationJob === watcher) notificationJob = null
+        }
+    }
+
+    private fun activityKey(): String? {
+        val account = _state.value.user?.accountKey ?: return null
+        val server = graph.target?.savedAddress ?: return null
+        return printActivityKey(server, account)
+    }
+
+    private fun loadReleaseHistory(server: String, account: String): List<ReleaseRecord> =
+        graph.secrets.readPrintActivity(printActivityKey(server, account))?.let {
+            runCatching { PharosJson.decodeFromString(ListSerializer(ReleaseRecord.serializer()), it) }.getOrNull()
+        }.orEmpty()
+
+    private fun saveReleaseHistory() {
+        val key = activityKey() ?: return
+        graph.secrets.savePrintActivity(key, PharosJson.encodeToString(ListSerializer(ReleaseRecord.serializer()), _state.value.releaseHistory))
+    }
+
+    fun clearReleaseHistory() {
+        _state.update { it.copy(releaseHistory = emptyList()) }
+        saveReleaseHistory()
+    }
 
     /** The printer list cached on disk, or empty if none is stored or it will not decode. */
     private fun cachedDevices(): List<Device> =
@@ -348,6 +389,7 @@ class Session(private val graph: AppGraph) {
                         nextJobsPage = null,
                         loadedAt = restored.snapshot.savedAt,
                         user = restored.user ?: it.user,
+                        releaseHistory = restored.user?.let { user -> loadReleaseHistory(target.savedAddress, user.accountKey) }.orEmpty(),
                         capabilities = restored.capabilities ?: it.capabilities,
                         apiVersion = restored.snapshot.apiVersion ?: it.apiVersion,
                         stale = true,
@@ -371,6 +413,7 @@ class Session(private val graph: AppGraph) {
      * questions the stock app only answered after a failed login.
      */
     fun connect(input: String) {
+        notificationJob?.cancel()
         if (_state.value.busy != null) return
         val target = PharosTarget.parse(input.trim())
         _state.update {
@@ -423,6 +466,7 @@ class Session(private val graph: AppGraph) {
     }
 
     private fun signIn(target: PharosTarget, creds: Credentials, announce: Boolean) {
+        notificationJob?.cancel()
         scope.launch {
             _state.update { it.copy(phase = Phase.Working, busy = "Signing in", failure = null) }
             graph.api.credentials = creds
@@ -498,6 +542,7 @@ class Session(private val graph: AppGraph) {
                             selection = if (it.user?.accountKey == account) it.selection else emptySet(),
                             transactions = if (it.user?.accountKey == account) it.transactions else emptyList(),
                             outcome = null,
+                            releaseHistory = loadReleaseHistory(target.savedAddress, account),
                             costCenter = remembered,
                             favouriteDevices = graph.prefs.favouriteDevicesFor(account),
                             recentDevices = graph.prefs.recentDevicesFor(account),
@@ -620,6 +665,7 @@ class Session(private val graph: AppGraph) {
         _state.update {
             it.copy(
                 jobs = page.items.distinctBy { it.location },
+                releaseHistory = updateReleaseHistory(it.releaseHistory, page.items, System.currentTimeMillis()),
                 selection = it.selection.intersect(page.items.map { job -> job.location }.toSet()),
                 jobsCount = page.count,
                 nextJobsPage = if (page.hasMoreAfter(page.items.size)) page else null,
@@ -628,14 +674,14 @@ class Session(private val graph: AppGraph) {
                 stale = false,
             )
         }
+        saveReleaseHistory()
         watchAnalysis()
     }
 
     /**
      * Keep looking at the queue while the server is still working on a document, then stop.
      *
-     * Pharos pushes nothing to a client: `/printjobs` is polled, and the SignalR channel the web
-     * portal uses is not something this API hands a token to (§4.1 item 9). A document GMU has
+     * Polling remains available when the notification connection cannot be established. A document GMU has
      * accepted is *not* priced yet — conversion, page counting and costing run server-side and
      * complete in about six seconds — so the single queue read that fires the instant an upload
      * returns always lands mid-analysis, and its row says "still counting". Before this, nothing
@@ -1070,12 +1116,26 @@ class Session(private val graph: AppGraph) {
         val names = jobs.associate { it.location to (it.name ?: it.location.substringAfterLast('/')) }
         val before = _state.value.balanceText
         val intent = _state.value.fundingLabel
-        val printer = device?.label ?: "the selected printer"
+        val printer = device.label
+        val requestedAt = System.currentTimeMillis()
+        val batch = java.util.UUID.randomUUID().toString()
+        fun record(accepted: Set<String>, refused: Set<String> = emptySet()) {
+            val additions = jobs.filter { it.location !in refused }.map { job ->
+                ReleaseRecord("$batch:${job.location}", job.location, names[job.location].orEmpty(),
+                    device.location, printer, requestedAt, job.location in accepted)
+            }
+            _state.update { it.copy(releaseHistory = mergeReleaseHistory(
+                it.releaseHistory.filterNot { receipt -> receipt.id.startsWith("$batch:") }, additions)) }
+            saveReleaseHistory()
+        }
+        _state.update { it.copy(busy = "Releasing ${jobs.size} job(s)", releasing = true) }
+        // Persist the attempt before sending: process death or a lost response leaves an honest receipt.
+        record(emptySet())
         scope.launch {
-            _state.update { it.copy(busy = "Releasing ${jobs.size} job(s)", releasing = true) }
-            val body = PrintRequests.release(jobs, device?.location, _state.value.user?.cardId, costCenterCode = costCenter)
+            val body = PrintRequests.release(jobs, device.location, _state.value.user?.cardId, costCenterCode = costCenter)
             when (val result = graph.api.release(target, body)) {
                 is ApiResult.Err -> {
+                    record(emptySet())
                     val failure = result.failure
                     _state.update {
                         it.copy(
@@ -1109,16 +1169,17 @@ class Session(private val graph: AppGraph) {
                         )
                     }
                     val moved = op.actedLocations.filter { it !in op.failures.mapNotNull { r -> r.strIn("Location", "JobLocation") } }
+                    record(moved.toSet(), op.failures.mapNotNull { r -> r.strIn("Location", "JobLocation") }.toSet())
                     val after = op.updatedUser?.let { u ->
                         _state.value.capabilities?.formats?.money(u.balance?.amount ?: u.balance?.total)
                     } ?: before
                     /*
-                     * Remember the machine, but only when something actually came out of it. A
+                     * Remember the machine only when the server accepted a release. A
                      * refused release is not a visit, and recording one would put a printer the
                      * student never successfully used at the top of their list.
                      */
                     val account = _state.value.user?.accountKey ?: graph.prefs.lastAccount
-                    if (moved.isNotEmpty() && account != null && device != null) {
+                    if (moved.isNotEmpty() && account != null) {
                         graph.prefs.noteDeviceUsed(account, device.location)
                     }
                     _state.update {
@@ -1442,12 +1503,15 @@ class Session(private val graph: AppGraph) {
     fun signOut() {
         val target = graph.target ?: return
         if (_state.value.busy == "Signing out") return
+        val watcher = notificationJob
+        watcher?.cancel()
         val previous = scope
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         _state.update { it.copy(phase = Phase.Working, busy = "Signing out", user = null) }
         scope.launch {
             // Await cancellation before clearing state: an old response must not restore an account.
             previous.coroutineContext.job.cancelAndJoin()
+            watcher?.join()
             withTimeoutOrNull(5_000) { graph.api.logout(target) }
             graph.forgetSession()
             forgetWebSession()
@@ -1457,7 +1521,7 @@ class Session(private val graph: AppGraph) {
                 phase = Phase.SignedOut,
                 host = target.displayHost,
                 apiVersion = graph.prefs.lastApiVersion,
-                notice = "Signed out. This phone's session and cached queue were cleared.",
+                notice = "Signed out. This phone's session, cached queue, and release receipts were cleared.",
             )
         }
     }

@@ -101,6 +101,13 @@ class SecureStore(context: Context) : CookieSnapshotStore {
         prefs.edit().remove(KEY_USER).remove(KEY_PASS).remove(KEY_REMEMBER).apply()
     }
 
+    /** Account-scoped document metadata is retained only when encrypted storage is available. */
+    fun readPrintActivity(key: String): String? = if (encryptedAtRest) prefs.getString(key, null) else null
+
+    fun savePrintActivity(key: String, value: String) {
+        if (encryptedAtRest) prefs.edit().putString(key, value).apply()
+    }
+
     private companion object {
         const val FILE_NAME = "masonprint_secure"
         const val KEY_USER = "username"

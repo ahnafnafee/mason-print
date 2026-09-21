@@ -428,6 +428,10 @@ private fun QueueOverflow(
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
         DropdownMenuItem(
+            text = { Text("Released jobs") },
+            onClick = { onDismiss(); router.push(Route.ReleasedJobs) },
+        )
+        DropdownMenuItem(
             text = { Text("Refresh") },
             leadingIcon = { Icon(Icons.Filled.Refresh, null) },
             onClick = {
