@@ -1345,7 +1345,7 @@ internal fun releaseReportText(
     if (outcome.refused.isNotEmpty()) {
         appendLine(if (outcome.transport == null) "Refused:" else "Release unconfirmed:")
         outcome.refused.forEach {
-            appendLine("- ${it.name}: ${if (outcome.transport != null) "check printer status before retrying" else it.reason ?: "no reason given by the server"}")
+            appendLine("- ${it.name}: ${if (outcome.transport != null) "check at the printer before retrying" else it.reason ?: "no reason given by the server"}")
         }
     }
 }.trimEnd()

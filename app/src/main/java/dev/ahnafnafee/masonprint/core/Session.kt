@@ -147,6 +147,9 @@ data class AppState(
     /** Per-job outcome of the release that just happened, for the Result screen. */
     val outcome: ReleaseOutcome? = null,
     val releaseHistory: List<ReleaseRecord> = emptyList(),
+    val checkingReleaseHistory: Boolean = false,
+    val releaseHistoryFailure: PharosFailure? = null,
+    val cancellingReleaseId: String? = null,
 ) {
     val signedIn: Boolean get() = phase == Phase.Ready && user != null
 
@@ -265,6 +268,7 @@ class Session(private val graph: AppGraph) {
 
     private var scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val previewDownloads = Mutex()
+    private val receiptChecks = Mutex()
 
     private val _state = MutableStateFlow(
         AppState(
@@ -281,6 +285,7 @@ class Session(private val graph: AppGraph) {
     )
     val state: StateFlow<AppState> = _state
     private var notificationJob: Job? = null
+    private var receiptWatcher: Job? = null
 
     /** Called only while the signed-in app is in the foreground. Coalesce notifications during work. */
     suspend fun watchQueueChanges() {
@@ -317,8 +322,96 @@ class Session(private val graph: AppGraph) {
     }
 
     fun clearReleaseHistory() {
+        if (_state.value.cancellingReleaseId != null) return
         _state.update { it.copy(releaseHistory = emptyList()) }
         saveReleaseHistory()
+    }
+
+    /** Foreground-only follow-up, bounded to five reads and one minute per new receipt batch. */
+    suspend fun pollReleaseHistory() {
+        val watcher = kotlinx.coroutines.currentCoroutineContext().job
+        receiptWatcher?.cancelAndJoin()
+        receiptWatcher = watcher
+        try { withTimeoutOrNull(60_000) {
+            for (pause in listOf(0L, 1_500L, 3_500L, 7_000L, 15_000L)) {
+                delay(pause)
+                while (_state.value.busy != null) delay(250)
+                val now = System.currentTimeMillis()
+                if (!_state.value.signedIn || _state.value.releaseHistory.none {
+                        it.charge == null && it.requestedAt in (now - 120_000)..now
+                    }) break
+                checkReleaseHistory()
+            }
+        } } finally { if (receiptWatcher === watcher) receiptWatcher = null }
+    }
+
+    fun refreshReleaseHistory() { scope.launch { checkReleaseHistory() } }
+
+    private suspend fun checkReleaseHistory() {
+        val target = graph.target ?: return
+        val key = activityKey() ?: return
+        if (!_state.value.signedIn || _state.value.releaseHistory.isEmpty() || !receiptChecks.tryLock()) return
+        fun current() = graph.target === target && activityKey() == key && _state.value.signedIn
+        try {
+            _state.update { it.copy(checkingReleaseHistory = true, releaseHistoryFailure = null) }
+            val result = if (target.userUri == null) {
+                when (val restored = graph.api.refreshUser(target, includeBalance = false)) {
+                    is ApiResult.Err -> restored
+                    is ApiResult.Ok -> readReleaseTransactions { skip, size ->
+                        if (current()) graph.api.transactions(target, skip, size, newestFirst = true)
+                        else ApiResult.Err(PharosFailure.NotFound("Session changed"))
+                    }
+                }
+            } else readReleaseTransactions { skip, size ->
+                if (current()) graph.api.transactions(target, skip, size, newestFirst = true)
+                else ApiResult.Err(PharosFailure.NotFound("Session changed"))
+            }
+            if (!current()) return
+            when (result) {
+                is ApiResult.Err -> _state.update { it.copy(releaseHistoryFailure = result.failure) }
+                is ApiResult.Ok -> {
+                    _state.update { it.copy(releaseHistory = matchReleaseCharges(it.releaseHistory, result.value, System.currentTimeMillis())) }
+                    saveReleaseHistory()
+                }
+            }
+        } finally {
+            if (current()) _state.update { it.copy(checkingReleaseHistory = false) }
+            receiptChecks.unlock()
+        }
+    }
+
+    /** The original Location reaches Secure Release even after it disappears from the user queue. */
+    fun attemptReleaseCancellation(receiptId: String) {
+        val target = graph.target ?: return
+        val key = activityKey() ?: return
+        val before = _state.value
+        val receipt = before.releaseHistory.firstOrNull { it.id == receiptId } ?: return
+        if (!before.signedIn || before.busy != null || before.upload != null || before.cancellingReleaseId != null ||
+            !canAttemptCancellation(before.releaseHistory, receipt)) return
+        val attemptedAt = System.currentTimeMillis()
+        fun current() = graph.target === target && activityKey() == key && _state.value.signedIn
+        fun record(result: ReleaseCancellation) {
+            if (!current()) return
+            _state.update { state -> state.copy(releaseHistory = state.releaseHistory.map {
+                if (it.id == receiptId) it.copy(cancellation = result) else it
+            }) }
+            saveReleaseHistory()
+        }
+        _state.update { it.copy(busy = "Requesting cancellation", cancellingReleaseId = receiptId) }
+        record(ReleaseCancellation(CancelVerdict.Unconfirmed, "Cancellation requested; no acknowledgement received yet.", attemptedAt))
+        scope.launch {
+            try {
+                when (val result = graph.api.deleteJobs(target, PrintRequests.deleteLocations(listOf(receipt.jobLocation)))) {
+                    is ApiResult.Err -> record(unconfirmedCancellation(result.failure, attemptedAt))
+                    is ApiResult.Ok -> record(cancellationVerdict(result.value, receipt.jobLocation, attemptedAt))
+                }
+            } catch (error: kotlinx.coroutines.CancellationException) { throw error
+            } catch (error: Exception) { record(unconfirmedCancellation(PharosFailure.Unknown(error), attemptedAt))
+            } finally {
+                if (current()) _state.update { it.copy(busy = null, cancellingReleaseId = null) }
+            }
+            if (current()) refresh()
+        }
     }
 
     /** The printer list cached on disk, or empty if none is stored or it will not decode. */
@@ -414,6 +507,7 @@ class Session(private val graph: AppGraph) {
      */
     fun connect(input: String) {
         notificationJob?.cancel()
+        receiptWatcher?.cancel()
         if (_state.value.busy != null) return
         val target = PharosTarget.parse(input.trim())
         _state.update {
@@ -467,6 +561,7 @@ class Session(private val graph: AppGraph) {
 
     private fun signIn(target: PharosTarget, creds: Credentials, announce: Boolean) {
         notificationJob?.cancel()
+        receiptWatcher?.cancel()
         scope.launch {
             _state.update { it.copy(phase = Phase.Working, busy = "Signing in", failure = null) }
             graph.api.credentials = creds
@@ -665,7 +760,6 @@ class Session(private val graph: AppGraph) {
         _state.update {
             it.copy(
                 jobs = page.items.distinctBy { it.location },
-                releaseHistory = updateReleaseHistory(it.releaseHistory, page.items, System.currentTimeMillis()),
                 selection = it.selection.intersect(page.items.map { job -> job.location }.toSet()),
                 jobsCount = page.count,
                 nextJobsPage = if (page.hasMoreAfter(page.items.size)) page else null,
@@ -674,7 +768,6 @@ class Session(private val graph: AppGraph) {
                 stale = false,
             )
         }
-        saveReleaseHistory()
         watchAnalysis()
     }
 
@@ -1505,6 +1598,8 @@ class Session(private val graph: AppGraph) {
         if (_state.value.busy == "Signing out") return
         val watcher = notificationJob
         watcher?.cancel()
+        val receipts = receiptWatcher
+        receipts?.cancel()
         val previous = scope
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         _state.update { it.copy(phase = Phase.Working, busy = "Signing out", user = null) }
@@ -1512,6 +1607,7 @@ class Session(private val graph: AppGraph) {
             // Await cancellation before clearing state: an old response must not restore an account.
             previous.coroutineContext.job.cancelAndJoin()
             watcher?.join()
+            receipts?.join()
             withTimeoutOrNull(5_000) { graph.api.logout(target) }
             graph.forgetSession()
             forgetWebSession()

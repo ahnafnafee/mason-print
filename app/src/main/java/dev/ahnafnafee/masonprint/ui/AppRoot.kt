@@ -78,7 +78,11 @@ fun AppRoot(
             session.watchQueueChanges()
         }
     }
-    LaunchedEffect(state.host, state.user?.accountKey) { PrinterJobsHandoff.clear() }
+    LaunchedEffect(state.signedIn, state.host, state.user?.accountKey, state.releaseHistory.map { it.id }, lifecycle) {
+        if (state.signedIn) lifecycle.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            session.pollReleaseHistory()
+        }
+    }
 
     // Building keys belong to a server; a previous campus must not hide another server's printers.
     LaunchedEffect(state.host) { ReleaseHandoff.clearFilter() }
@@ -226,9 +230,8 @@ fun AppRoot(
             Route.Confirm -> ConfirmRelease(state, session, router)
             Route.Result -> ReleaseResult(state, session, router)
             Route.ReleasedJobs -> ReleasedJobsScreen(state, session, router)
-            Route.PrinterJobs -> PrinterJobsScreen(state, graph, onBack = { router.pop() })
 
-            Route.Account -> AccountScreen(state, session, graph, router)
+            Route.Account, Route.Statement -> AccountScreen(state, session, graph, router, initialHistory = route == Route.Statement)
             Route.CostCenters -> CostCentersScreen(state, session, router)
             Route.AddFunds -> AddFundsScreen(state, session, router)
         }

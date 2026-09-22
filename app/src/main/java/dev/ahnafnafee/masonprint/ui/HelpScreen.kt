@@ -43,7 +43,7 @@ private data class HelpEntry(val term: String, val meaning: String)
  */
 private val HelpEntries = listOf(
     HelpEntry("Release", "Sending it to the selected printer. Acceptance does not confirm that pages have printed."),
-    HelpEntry("Printer jobs", "Check waiting or printing jobs through a configured printer connection. Cancel is available when the printer supports it."),
+    HelpEntry("Released jobs", "Match releases to print charges and ask the server to cancel. Printing may already have started; a charge does not confirm printed pages."),
     HelpEntry("Held", "Waiting on the server for you."),
     HelpEntry("Estimate", "A preview of the cost. The server confirms the charge when you release."),
     HelpEntry("Not priced", "A cost is not available. Choose a printer and review the job to check again."),

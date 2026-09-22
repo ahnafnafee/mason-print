@@ -173,8 +173,11 @@ object PrintRequests {
     }.encode()
 
     /** `DELETE /printjobs` — a DELETE with a body, same `{PrintJobs:[{Location}]}` envelope. */
-    fun delete(jobs: List<PrintJob>): String = buildJsonObject {
-        put("PrintJobs", JsonArray(jobs.map { buildJsonObject { put("Location", it.location) } }))
+    fun delete(jobs: List<PrintJob>): String = deleteLocations(jobs.map { it.location })
+
+    /** Released jobs are no longer in the queue; send their original Pharos Location. */
+    fun deleteLocations(locations: List<String>): String = buildJsonObject {
+        put("PrintJobs", JsonArray(locations.map { buildJsonObject { put("Location", it) } }))
     }.encode()
 
     private fun emptyObject(): JsonObject = buildJsonObject { }

@@ -1,0 +1,11 @@
+[
+  {
+    "Status": 300,
+    "UserMessage": "The operation could not be completed. &#39;The Secure Release operation &#39;DeleteJob&#39; failed. The print job &#39;00000000-0000-0000-0000-000000000001&#39; is already being printed.&#39;",
+    "ErrorCode": "TranslationNotFound",
+    "ErrorContext": "ExceptionTranslationContext",
+    "DeveloperMessage": "The Secure Release operation 'DeleteJob' failed. The print job '00000000-0000-0000-0000-000000000001' is already being printed.",
+    "Location": "/printjobs/example",
+    "Request": "https://mobileprint.gmu.edu/PharosAPI/printjobs/example"
+  }
+]

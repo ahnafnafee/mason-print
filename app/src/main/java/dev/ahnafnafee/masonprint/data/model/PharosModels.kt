@@ -687,6 +687,8 @@ data class Transaction(
     val offline: Boolean?,
     val pages: Long?,
     val sheets: Long?,
+    val chargedTo: String? = null,
+    val device: String? = null,
 ) {
     val isCredit: Boolean get() = (amount ?: 0.0) > 0.0
     val at: Instant? get() = parsePharosTime(time)
@@ -724,6 +726,7 @@ data class Transaction(
             jobName?.takeIf { it.isNotBlank() && it != descriptionHead },
             printer ?: server,
             purse?.takeIf { it.isNotBlank() },
+            chargedTo?.takeIf { it.isNotBlank() && it != purse },
         ).joinToString(" · ")
 
     companion object {
@@ -751,6 +754,8 @@ data class Transaction(
             offline = o.bool("Offline"),
             pages = o.lng("Pages"),
             sheets = o.lng("Sheets"),
+            chargedTo = cleanSentence(o.strCI("ChargedTo")),
+            device = o.strCI("Device"),
         )
     }
 }
@@ -1014,6 +1019,9 @@ fun parsePharosTime(raw: String?): Instant? {
     runCatching { return Instant.parse(s) }
     runCatching { return OffsetDateTime.parse(s, DateTimeFormatter.ISO_OFFSET_DATE_TIME).toInstant() }
     runCatching { return LocalDateTime.parse(s, DateTimeFormatter.ISO_LOCAL_DATE_TIME).toInstant(ZoneOffset.UTC) }
+    // Zone-less ledger dates follow the existing server UTC convention, never the phone's zone.
+    runCatching { return LocalDateTime.parse(s, DateTimeFormatter.ofPattern("M/d/uuuu HH:mm:ss", java.util.Locale.US)
+        .withResolverStyle(java.time.format.ResolverStyle.STRICT)).toInstant(ZoneOffset.UTC) }
     // A bare `2024-05-08T14:22:31` with no zone is UTC in every Pharos response observed; the
     // field names all end in `Utc`, so assuming the local zone would drift the "expires in" label.
     runCatching { return OffsetDateTime.parse(s + "Z").toInstant() }

@@ -4,8 +4,6 @@ import android.content.Context
 import android.content.SharedPreferences
 import dev.ahnafnafee.masonprint.data.net.TrustedCertificate
 import dev.ahnafnafee.masonprint.data.net.TlsTrustStore
-import dev.ahnafnafee.masonprint.data.net.PrinterConnection
-import dev.ahnafnafee.masonprint.data.model.PharosJson
 
 /**
  * Everything that is *not* a secret, in plain `SharedPreferences`.
@@ -21,15 +19,10 @@ class AppPrefs(context: Context) {
     private val prefs: SharedPreferences =
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 
-    /** Endpoint and username only, scoped by server, account and device; never a printer password. */
-    fun printerConnectionFor(key: String): PrinterConnection? =
-        prefs.getString("printer_connection::$key", null)?.let {
-            runCatching { PharosJson.decodeFromString(PrinterConnection.serializer(), it) }.getOrNull()
-        }
-
-    fun setPrinterConnectionFor(key: String, connection: PrinterConnection) {
-        prefs.edit().putString("printer_connection::$key",
-            PharosJson.encodeToString(PrinterConnection.serializer(), connection)).apply()
+    init {
+        // The removed IPP screen stored addresses and usernames, never passwords.
+        val oldConnections = prefs.all.keys.filter { it.startsWith("printer_connection::") }
+        if (oldConnections.isNotEmpty()) prefs.edit().also { editor -> oldConnections.forEach { editor.remove(it) } }.apply()
     }
 
     /** Last server the user configured. Empty on first run, which routes to the connect screen. */

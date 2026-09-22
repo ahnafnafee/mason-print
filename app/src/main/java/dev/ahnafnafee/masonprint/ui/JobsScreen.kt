@@ -285,7 +285,7 @@ fun JobsScreen(
                     onSelectAll = { session.toggleSelectAll(showReleased) },
                     onClear = { session.clearSelection() },
                 )
-                TextButton(onClick = { router.push(Route.ReleasedJobs) }) { Text("Released jobs and printer status") }
+                TextButton(onClick = { router.push(Route.ReleasedJobs) }) { Text("Released jobs and charges") }
             }
 
             items(visible, key = { it.location }) { job ->

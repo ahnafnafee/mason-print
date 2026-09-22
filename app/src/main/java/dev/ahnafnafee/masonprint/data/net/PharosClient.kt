@@ -63,6 +63,9 @@ class PharosClient(
     @Volatile var credentials: Credentials? = null
     @Volatile var apiVersion: String? = null
     private val notifications by lazy { PharosNotifications(http) }
+    private val deleteHttp by lazy {
+        http.newBuilder().retryOnConnectionFailure(false).followRedirects(false).followSslRedirects(false).build()
+    }
 
     suspend fun watchQueueChanges(target: PharosTarget, onChanged: suspend () -> Unit) {
         val header = credentials?.headerValue ?: return
@@ -324,7 +327,8 @@ class PharosClient(
         bodyJson: String,
         method: String = "POST",
     ): ApiResult<dev.ahnafnafee.masonprint.data.model.JobOperationResult> =
-        when (val r = execute(target, url, method = method, body = bodyJson.toRequestBody(JSON))) {
+        when (val r = execute(target, url, method = method,
+            body = bodyJson.toRequestBody(JSON).let { if (method == "DELETE") it.singleAttempt() else it })) {
             is ApiResult.Err -> r
             is ApiResult.Ok -> ApiResult.Ok(
                 dev.ahnafnafee.masonprint.data.model.JobOperationResult.from(r.body), r.status, r.body,
@@ -404,11 +408,12 @@ class PharosClient(
     }
 
     /** `GET {UserUri}/transactions?Skip=&PageSize=` — the statement screen's data. */
-    suspend fun transactions(target: PharosTarget, skip: Int, pageSize: Int = 50): ApiResult<Page<Transaction>> {
+    suspend fun transactions(target: PharosTarget, skip: Int, pageSize: Int = 50, newestFirst: Boolean = false): ApiResult<Page<Transaction>> {
         val user = target.userUri ?: return ApiResult.Err(PharosFailure.NotFound("{UserUri} not yet known"))
         val url = user.newBuilder().addPathSegment("transactions")
             .addQueryParameter("Skip", skip.toString())
             .addQueryParameter("PageSize", pageSize.toString())
+            .apply { if (newestFirst) addQueryParameter("OrderByDesc", "Identifier") }
             .build()
         return execute(target, url).let { r ->
             when (r) {
@@ -540,7 +545,7 @@ class PharosClient(
     ): ApiResult<List<Pair<String, String>>> {
         val raw = try {
             executeRaw(
-                client = if (upload) uploadHttp else http,
+                client = when { upload -> uploadHttp; method == "DELETE" -> deleteHttp; else -> http },
                 url = url,
                 method = method,
                 body = body,
@@ -679,6 +684,14 @@ fun IOException.toPharosFailureException(upload: Boolean): PharosTransportExcept
 }
 
 private val JSON = "application/json".toMediaType()
+
+/** Disallow response-driven retries (including 503 Retry-After: 0) as well as transport retries. */
+private fun RequestBody.singleAttempt(): RequestBody = object : RequestBody() {
+    override fun contentType() = this@singleAttempt.contentType()
+    override fun contentLength() = this@singleAttempt.contentLength()
+    override fun isOneShot() = true
+    override fun writeTo(sink: BufferedSink) = this@singleAttempt.writeTo(sink)
+}
 
 /** OkHttp call as a cancellable continuation — a cancelled upload must stop burning radio time. */
 private suspend fun OkHttpClient.await(request: Request): Response =

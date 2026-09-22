@@ -119,12 +119,13 @@ fun AccountScreen(
     session: Session,
     graph: AppGraph,
     router: Router,
+    initialHistory: Boolean = false,
 ) {
     val reduced = rememberReducedMotion()
     var logOffOpen by rememberSaveable { mutableStateOf(false) }
     // History is its own tab: it is the one unbounded list on this screen, and stacking it under the
     // balance pushed the settings and the log-off button past the end of a long statement.
-    var historyTab by rememberSaveable { mutableStateOf(false) }
+    var historyTab by rememberSaveable { mutableStateOf(initialHistory) }
     var txnQuery by rememberSaveable { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
@@ -643,8 +644,7 @@ private fun LazyListScope.transactionHistory(
                         "The statement is not cached, so there is nothing to show without a connection. " +
                             "Pull to refresh when you are back on campus."
                     } else {
-                        "This account has no posted transactions. Money is charged at the printer, not " +
-                            "when a job is sent, so a queue is often empty of history until something prints."
+                        "No transactions were returned. Print charges appear at release and do not confirm that pages printed."
                     },
                     icon = Icons.AutoMirrored.Filled.ReceiptLong,
                 )
@@ -685,6 +685,7 @@ private fun matchesTransaction(txn: Transaction, q: String): Boolean =
         txn.subType,
         txn.time,
         txn.costCenters,
+        txn.chargedTo,
         txn.amount?.toString(),
     ).any { it.contains(q, ignoreCase = true) }
 
