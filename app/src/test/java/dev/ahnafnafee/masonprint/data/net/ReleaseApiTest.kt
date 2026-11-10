@@ -37,7 +37,7 @@ class ReleaseApiTest {
             val deleted = client.deleteJobs(target, PrintRequests.deleteLocations(listOf("/printjobs/example"))) as ApiResult.Ok
             assertEquals(CancelVerdict.Refused, cancellationVerdict(deleted.value, "/printjobs/example", 1).verdict)
             assertEquals(listOf(
-                "GET /PharosAPI/users/example/transactions?Skip=0&PageSize=100&OrderByDesc=Identifier ",
+                "GET /PharosAPI/users/example/transactions?Skip=0&PageSize=100&OrderByDesc=Time ",
                 "DELETE /PharosAPI/printjobs {\"PrintJobs\":[{\"Location\":\"/printjobs/example\"}]}"), requests.toList())
             assertTrue(auth.all { it == client.credentials!!.headerValue })
         } finally { server.stop(0) }

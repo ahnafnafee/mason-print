@@ -407,13 +407,20 @@ class PharosClient(
         return ApiResult.Ok(UserBalance(null, emptyList()), 200)
     }
 
-    /** `GET {UserUri}/transactions?Skip=&PageSize=` — the statement screen's data. */
+    /**
+     * `GET {UserUri}/transactions?Skip=&PageSize=` — the statement screen's data.
+     *
+     * Newest-first ordering sorts by `Time`, not `Identifier`. `Identifier` is each row's own opaque
+     * id field, but GMU's OData endpoint does not expose it as an orderable column: `OrderByDesc=Identifier`
+     * answers HTTP 300 `TranslationNotFound` "Invalid column name 'Identifier'". `Time` is accepted and
+     * returns the statement newest-first (verified live against mobileprint.gmu.edu, 2026-11-10).
+     */
     suspend fun transactions(target: PharosTarget, skip: Int, pageSize: Int = 50, newestFirst: Boolean = false): ApiResult<Page<Transaction>> {
         val user = target.userUri ?: return ApiResult.Err(PharosFailure.NotFound("{UserUri} not yet known"))
         val url = user.newBuilder().addPathSegment("transactions")
             .addQueryParameter("Skip", skip.toString())
             .addQueryParameter("PageSize", pageSize.toString())
-            .apply { if (newestFirst) addQueryParameter("OrderByDesc", "Identifier") }
+            .apply { if (newestFirst) addQueryParameter("OrderByDesc", "Time") }
             .build()
         return execute(target, url).let { r ->
             when (r) {
