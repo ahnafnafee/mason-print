@@ -104,9 +104,9 @@ Every request, its status, and the server's own wording for a failure. When a ca
 
 ### `10` Check release charges and attempt cancellation
 
-Open **Released jobs and charges** from the queue to find up to 100 local release receipts. After release, the app briefly checks your Pharos statement for a unique matching charge and shows the amount and funding source. A charge confirms billing; it does not prove pages came out. Receipts are encrypted when saved and cleared at sign-out. Pharos notifications continue to refresh the queue while the app is visible.
+Open **Released jobs and charges** from the queue to see local release receipts and recent print charges from your Pharos statement. A charge with a unique receipt match appears on that receipt with its amount and funding source. Check the printer for physical output. Receipts are encrypted when saved and cleared at sign-out. Pharos notifications continue to refresh the queue while the app is visible.
 
-**Try to cancel** sends one request through Pharos using the original job location, even after it leaves the queue. The receipt displays the server's answer, including an “already being printed” refusal. GMU normally starts printing immediately, so cancellation may be too late. A lost response stays unconfirmed, and cancellation does not guarantee a refund. No printer address or separate printer login is needed. See [release receipts and cancellation limits](docs/PRINTER-STATUS.md).
+For a held job, select it and choose **More actions → Cancel print job**. After release, open **Released jobs and cancellation** from the result and choose **Try to cancel** on the receipt. GMU normally starts printing immediately, so Pharos may refuse the request. The receipt shows the server’s answer. See [release receipts and cancellation limits](docs/PRINTER-STATUS.md).
 
 <div align="right">
 
@@ -135,8 +135,8 @@ Worth knowing before you use it, because the money moves later than most people 
 
 1. **Send.** The document uploads to the print server and joins your queue. Nothing is charged.
 2. **Wait a moment.** The server converts it, counts the pages, and prices it. The queue listens for changes while the app is visible and also rechecks documents still being processed.
-3. **Choose.** Select the jobs you want and pick a funding source: your own balance, or a department cost center if you have one.
-4. **Release.** At the printer, scan its code and confirm the selected jobs. GMU bills the selected funding source and starts sending the job to the printer. Check **Released jobs and charges** for a matching statement entry or a cancellation attempt; check at the printer for physical output.
+3. **Set print options.** Open **Print options** on a document to set copies, sides, and color. Select several documents to apply shared options from the selection bar. Pick a funding source and use **Choose printer** to open the list or scan a code. If you have already chosen a printer, **Review and release** takes you straight to the final review.
+4. **Review and release.** The confirmation screen shows the print controls and updates the estimate after you apply changes. Confirm at the printer when you are ready. GMU bills the selected funding source and sends the jobs to the printer. Check **Released jobs and charges** for billing and cancellation.
 
 Deleting a job before you release it costs nothing, because nothing was ever spent.
 

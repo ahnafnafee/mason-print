@@ -67,6 +67,27 @@ class RouterTest {
     }
 
     @Test
+    fun `picking a printer opens review with the queue directly behind it`() {
+        val r = Router(Route.Queue)
+        r.push(Route.Release)
+        r.reviewSelectedPrinter()
+        assertEquals(Route.Confirm, r.current)
+        assertEquals(listOf(Route.Queue), r.trail())
+        assertEquals(Route.Queue, r.pop())
+    }
+
+    @Test
+    fun `review opens directly for an existing device and changing it returns to the same review`() {
+        val r = Router(Route.Queue)
+        r.reviewSelectedPrinter()
+        assertEquals(Route.Confirm, r.current)
+        r.push(Route.Release)
+        r.reviewSelectedPrinter()
+        assertEquals(Route.Confirm, r.current)
+        assertEquals(listOf(Route.Queue), r.trail())
+    }
+
+    @Test
     fun `reset drops the whole stack so Back cannot walk into a dead phase`() {
         val r = Router(Route.Campus)
         r.push(Route.Certificate)

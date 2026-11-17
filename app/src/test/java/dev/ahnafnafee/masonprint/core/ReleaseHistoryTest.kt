@@ -59,6 +59,19 @@ class ReleaseHistoryTest {
         val txn = transaction().copy(jobName = null, description = "Assignment.pdf\n1 page", device = null, printer = "/devices/1")
         assertNotNull(matchReleaseCharges(listOf(receipt()), listOf(txn), time).single().charge)
     }
+    @Test fun `statement prints appear without local receipts and matched charges appear only once`() {
+        val local = transaction()
+        val older = transaction("102", "2026-09-20T02:00:00Z").copy(jobName = "Older.pdf&#10;3 pages")
+        val noIdentifier = transaction().copy(identifier = null, jobName = null, description = "Library.pdf\n1 page")
+        val deposit = transaction("103").copy(transactionType = "Credit")
+        val rows = listOf(local, older, older, noIdentifier, deposit)
+
+        assertEquals(listOf(local, older, noIdentifier), unmatchedPrintTransactions(emptyList(), rows))
+        val history = matchReleaseCharges(listOf(receipt()), rows, time)
+        assertEquals(listOf(older, noIdentifier), unmatchedPrintTransactions(history, rows))
+        assertEquals("Older.pdf", older.printDocumentName)
+        assertEquals("Library.pdf", noIdentifier.printDocumentName)
+    }
     @Test fun `old cached queue states are discarded`() {
         val record = PharosJson.decodeFromString<ReleaseRecord>("""{"id":"one","jobLocation":"/printjobs/example",
             "name":"Assignment.pdf","printerLocation":"/devices/1","printerName":"Library printer",

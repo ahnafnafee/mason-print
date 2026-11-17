@@ -41,7 +41,6 @@ import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Print
-import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Savings
 import androidx.compose.material.icons.filled.Tune
@@ -81,7 +80,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.ahnafnafee.masonprint.core.AppState
 import dev.ahnafnafee.masonprint.core.Session
-import dev.ahnafnafee.masonprint.ui.theme.MasonPillShape
+import dev.ahnafnafee.masonprint.data.model.FinishingOptions
+import dev.ahnafnafee.masonprint.data.model.PrintJob
 import dev.ahnafnafee.masonprint.ui.theme.SelectionBarCorner
 import dev.ahnafnafee.masonprint.ui.theme.currentMasonColors
 
@@ -136,27 +136,16 @@ private fun SettingRow(
     }
 }
 
-/**
- * The current print settings, short enough to sit on a button.
- *
- * Says the value, not the noun: "2 copies" and "1-sided" tell a student what will come out of the
- * machine, where "Options" only tells them a menu exists. Copies lead because they are the setting
- * most often wrong and the only one that multiplies the cost. A selection whose jobs disagree says
- * "Mixed" rather than picking one of them to display.
- */
-internal fun finishingSummary(jobs: List<dev.ahnafnafee.masonprint.data.model.PrintJob>): String {
-    val all = jobs.mapNotNull { it.finishing }
-    if (all.isEmpty()) return "Options"
-    fun <T> agreed(pick: (dev.ahnafnafee.masonprint.data.model.FinishingOptions) -> T): T? =
-        all.map(pick).distinct().singleOrNull()
-    val copies = agreed { it.copies } ?: return "Mixed"
-    val duplex = agreed { it.duplex }
-    val mono = agreed { it.mono }
+internal fun finishingSummary(jobs: List<PrintJob>): String {
+    fun <T> describe(mixed: String, pick: (FinishingOptions) -> T?, format: (T) -> String): String? {
+        val values = jobs.map { it.finishing?.let(pick) }.distinct()
+        return if (values.size > 1) mixed else values.singleOrNull()?.let(format)
+    }
     return listOfNotNull(
-        if (copies > 1L) "$copies copies" else null,
-        duplex?.let { if (it) "2-sided" else "1-sided" } ?: "Mixed sides",
-        mono?.let { if (it) "B&W" else "Colour" } ?: "Mixed colour",
-    ).joinToString(" · ").ifBlank { "Options" }
+        describe("Mixed copies", { it.copies }) { if (it == 1L) "1 copy" else "$it copies" },
+        describe("Mixed sides", { it.duplex }) { if (it) "Double-sided" else "One-sided" },
+        describe("Mixed color", { it.mono }) { if (it) "B&W" else "Color" },
+    ).joinToString(" · ").ifBlank { "Check settings" }
 }
 
 /**
@@ -171,9 +160,9 @@ internal class QueueSelection(
     val onClear: () -> Unit,
     val onPrinter: () -> Unit,
     val onChargeTo: () -> Unit,
-    val onCopies: () -> Unit,
+    val onPrintOptions: () -> Unit,
     val onEstimate: () -> Unit,
-    val onDelete: () -> Unit,
+    val onCancelJobs: () -> Unit,
     val onRelease: () -> Unit,
     val onAddFunds: () -> Unit,
 )
@@ -193,10 +182,8 @@ internal class QueueSelection(
  *  - **Pull-to-refresh is the surface, not a button.** Refresh exists in three places — the gesture, the
  *    bar's icon, and the first overflow item — and all three call [Session.refresh], because in this API
  *    there is exactly one thing to refresh: the user (and with it the balance) and the queue, together.
- *  - **The bar carries one verb and one number; upload floats.** "Release at a printer" owns the bar
- *    with the queue's total beside it, and Upload is an extended FAB above them that hides while the
- *    selection bar is up, so the gesture that adds a job is always in the same corner and never
- *    competes with a decision the selection bar is asking for.
+ *  - The bar shows the queue total until documents are selected, then offers the next step toward
+ *    release. The Upload button hides while the selection actions are visible.
  */
 @Composable
 internal fun QueueScaffold(
@@ -213,7 +200,7 @@ internal fun QueueScaffold(
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     var menuOpen by rememberSaveable { mutableStateOf(false) }
 
-    val selecting = state.selection.isNotEmpty()
+    val selecting = state.chosen.isNotEmpty()
     // Uploads have their own progress in the list, so they do not also need a refresh spinner.
     val refreshing = state.busy != null && state.upload == null && !preparingDocuments
 
@@ -324,74 +311,24 @@ internal fun QueueScaffold(
                 shadowElevation = 8.dp,
             ) {
                 Column(Modifier.fillMaxWidth().navigationBarsPadding()) {
-                    /*
-                     * The verb that owns the bar, and the number that answers it.
-                     *
-                     * "Release at a printer" stays on the bar because it is where you are standing
-                     * when you need it. Upload moves out — to the FAB above this bar — because
-                     * adding a job is an anywhere-action, not a stand-at-the-printer one, and two
-                     * same-weight buttons made "which one starts a print?" a real question.
-                     *
-                     * In its place, the queue's own total: what releasing everything waiting would
-                     * cost, summed the same honest way the selection bar sums — unpriced jobs
-                     * contribute nothing and are named below the number, because `-1` is not a
-                     * price and a total that quietly swallowed it would be a lie the walk to the
-                     * printer discovers.
-                     *
-                     * Swapped with the selection bar in one frame, no transition machinery: a
-                     * bottom bar whose height changes over spring frames re-pads the full-screen
-                     * list behind it on every one of those frames, which reads as the bar
-                     * *lagging*; one frame reads as arriving. (§2.0.5 said this for reduced
-                     * motion — a screen full of job cards needs it always.)
-                     */
-                    if (!selecting) {
-                        val waiting = state.pendingJobs(false)
+                    val waiting = state.pendingJobs(false)
+                    if (!selecting && waiting.isNotEmpty()) {
+                        val count = waiting.size
                         val priced = waiting.filterNot { it.costUnknown }
-                        val totalText =
-                            state.capabilities?.formats?.money(priced.sumOf { it.cost ?: 0.0 }) ?: "—"
-                        val unpriced = waiting.size - priced.size
+                        val totalText = state.capabilities?.formats?.money(priced.sumOf { it.cost ?: 0.0 }) ?: "—"
+                        val unpriced = count - priced.size
                         FlowRow(
-                            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 10.dp),
+                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                            itemVerticalAlignment = Alignment.CenterVertically,
                         ) {
-                            /*
-                             * The Release pill, in the pair [MasonColors.barPill] spells per theme:
-                             * white with Mason-green ink in light — a saturated green pill on this
-                             * grey-blue read as a muddy dark lump, while white-on-grey-blue is
-                             * instantly a button — and mint with dark ink in dark, where a plain
-                             * surface pill would be near-black on near-dark and vanish. Same shape
-                             * either way; the ink keeps the brand.
-                             */
-                            Surface(
-                                onClick = { router.push(Route.Release) },
-                                shape = MasonPillShape,
-                                color = currentMasonColors.barPill,
-                                contentColor = currentMasonColors.onBarPill,
-                            ) {
-                                Row(
-                                    Modifier.padding(horizontal = 20.dp, vertical = 13.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                ) {
-                                    Icon(Icons.Filled.QrCodeScanner, null, Modifier.size(18.dp))
-                                    Text(
-                                        "Release at a printer",
-                                        style = MaterialTheme.typography.labelLarge,
-                                        textAlign = TextAlign.Center,
-                                    )
-                                }
-                            }
+                            Text("Select documents to print", style = MaterialTheme.typography.labelLarge)
                             Column(horizontalAlignment = Alignment.End) {
                                 MoneyText(totalText)
                                 Text(
-                                    if (unpriced > 0) "${waiting.size} waiting · $unpriced not priced yet"
-                                    else "${waiting.size} waiting",
+                                    if (unpriced > 0) "$count waiting · $unpriced not priced yet" else "$count waiting",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                    textAlign = TextAlign.End,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
                                 )
                             }
                         }
@@ -430,6 +367,11 @@ private fun QueueOverflow(
         DropdownMenuItem(
             text = { Text("Released jobs") },
             onClick = { onDismiss(); router.push(Route.ReleasedJobs) },
+        )
+        DropdownMenuItem(
+            text = { Text("Browse printers") },
+            leadingIcon = { Icon(Icons.Filled.Print, null) },
+            onClick = { onDismiss(); router.push(Route.Release) },
         )
         DropdownMenuItem(
             text = { Text("Refresh") },
@@ -554,43 +496,29 @@ private fun QueueSelectionBar(
                                 onClick = { moreActionsOpen = false; selection.onEstimate() },
                             )
                             DropdownMenuItem(
-                                text = { Text("Delete") },
+                                text = { Text(if (chosen.size == 1) "Cancel print job" else "Cancel print jobs") },
                                 enabled = state.busy == null && state.upload == null,
                                 leadingIcon = { Icon(Icons.Filled.Delete, null) },
-                                onClick = { moreActionsOpen = false; selection.onDelete() },
+                                onClick = { moreActionsOpen = false; selection.onCancelJobs() },
                             )
                         }
                     }
                 }
 
-                /*
-                 * Three decisions are made before a release: which machine, who pays, and how it
-                 * prints. They are peers, so they are three peer rows.
-                 *
-                 * They were two buttons and an overflow, which is how the app ended up with no
-                 * discoverable way to set copies, sides or colour: a student looking for them found
-                 * two buttons about machines and money, and a dot menu that reads as "rare and
-                 * destructive". Making them three equal buttons instead only moved the problem,
-                 * because three labels plus an overflow on a phone truncates every one of them to
-                 * "Pri…", "Pa…", "2-…".
-                 *
-                 * Full-width rows give each its whole line, so each can state its *current value*
-                 * instead of a noun. The bar then answers all three questions without being opened,
-                 * which is the actual fix: the settings were not merely hidden, they were invisible.
-                 */
                 Spacer(Modifier.height(6.dp))
-                SettingRow(
-                    icon = Icons.Filled.Print,
-                    label = "Printer",
-                    value = state.selectedDevice?.let { device ->
-                        val station = stationOf(device, state.host)
-                        buildingName(station.building)?.let { name ->
-                            listOfNotNull(name, stationRoom(station)).joinToString(" · ")
-                        } ?: device.label
-                    } ?: "Not chosen yet",
-                    onClick = selection.onPrinter,
-                    maxLines = 3,
-                )
+                state.selectedDevice?.let { device ->
+                    val station = stationOf(device, state.host)
+                    val destination = buildingName(station.building)?.let { name ->
+                        listOfNotNull(name, stationRoom(station)).joinToString(" · ")
+                    } ?: device.label
+                    SettingRow(
+                        icon = Icons.Filled.Print,
+                        label = "Change printer",
+                        value = destination,
+                        onClick = selection.onPrinter,
+                        maxLines = 3,
+                    )
+                }
                 SettingRow(
                     icon = if (onDepartment) Icons.Filled.BusinessCenter else Icons.Filled.Work,
                     label = "Pay with",
@@ -599,9 +527,10 @@ private fun QueueSelectionBar(
                 )
                 SettingRow(
                     icon = Icons.Filled.Tune,
-                    label = "Print",
+                    label = "Print options",
                     value = finishingSummary(chosen),
-                    onClick = selection.onCopies,
+                    onClick = selection.onPrintOptions,
+                    maxLines = 2,
                 )
 
                 if (showBalanceWarning) {
@@ -628,10 +557,9 @@ private fun QueueSelectionBar(
                 }
 
                 Spacer(Modifier.height(8.dp))
-                // The same pill pair as the idle bar's Release button, for the same reason.
                 Button(
                     onClick = selection.onRelease,
-                    enabled = state.busy == null && count > 0,
+                    enabled = state.busy == null && state.upload == null && chosen.isNotEmpty() && chosen.all { it.pending },
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = currentMasonColors.barPill,
@@ -639,8 +567,8 @@ private fun QueueSelectionBar(
                     ),
                 ) {
                     Text(
-                        "Review $count ${if (count == 1) "job" else "jobs"} · $totalText",
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        if (state.selectedDevice == null) "Choose printer" else "Review and release",
+                        textAlign = TextAlign.Center,
                     )
                 }
             }

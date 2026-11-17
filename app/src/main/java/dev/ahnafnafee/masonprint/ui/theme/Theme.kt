@@ -278,6 +278,8 @@ val LocalMasonColors = staticCompositionLocalOf { MasonColorsLight }
 val currentMasonColors: MasonColors
     @Composable get() = LocalMasonColors.current
 
+internal val LocalMasonDarkTheme = staticCompositionLocalOf { false }
+
 /**
  * The app's theme: the Mason palette on Material 3 **Expressive**.
  *
@@ -312,7 +314,11 @@ fun MasonPrintTheme(
     }
     val extra = if (darkTheme) MasonColorsDark else MasonColorsLight
 
-    CompositionLocalProvider(LocalMasonColors provides extra, LocalMasonType provides MasonType) {
+    CompositionLocalProvider(
+        LocalMasonColors provides extra,
+        LocalMasonType provides MasonType,
+        LocalMasonDarkTheme provides darkTheme,
+    ) {
         MaterialExpressiveTheme(
             colorScheme = scheme,
             motionScheme = MotionScheme.expressive(),

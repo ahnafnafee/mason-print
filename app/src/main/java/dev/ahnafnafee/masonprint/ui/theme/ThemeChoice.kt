@@ -1,7 +1,6 @@
 package dev.ahnafnafee.masonprint.ui.theme
 
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.runtime.Composable
+import android.content.res.Configuration
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -21,9 +20,8 @@ enum class ThemeMode(val id: String, val label: String) {
 }
 
 /** Whether this choice means dark right now. Only [ThemeMode.System] has to ask the phone. */
-@Composable
-fun ThemeMode.isDark(): Boolean = when (this) {
-    ThemeMode.System -> isSystemInDarkTheme()
+internal fun ThemeMode.isDark(configuration: Configuration): Boolean = when (this) {
+    ThemeMode.System -> (configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
     ThemeMode.Light -> false
     ThemeMode.Dark -> true
 }

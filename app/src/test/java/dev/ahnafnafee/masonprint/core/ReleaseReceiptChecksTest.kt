@@ -28,7 +28,7 @@ class ReleaseReceiptChecksTest {
             assertEquals(CancelVerdict.Unconfirmed, verdict(body).verdict)
         }
         for (fields in listOf("\"Status\":300", "\"Status\":200,\"ErrorCode\":\"TranslationNotFound\"",
-            "\"Status\":200,\"Success\":false")) {
+            "\"Status\":200,\"Success\":false", "\"StatusCode\":300,\"Success\":true")) {
             assertEquals(CancelVerdict.Refused, verdict("""[{"Location":"$location",$fields}]""").verdict)
         }
     }

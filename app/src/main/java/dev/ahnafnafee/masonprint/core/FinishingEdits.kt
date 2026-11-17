@@ -9,6 +9,8 @@ data class FinishingEdits(
     val duplex: Boolean? = null,
     val copies: Long? = null,
 ) {
+    fun changesAny(jobs: List<PrintJob>): Boolean = jobs.any { optionsFor(it) != FinishingPayload.from(it.finishing) }
+
     fun optionsFor(job: PrintJob): FinishingPayload {
         val current = FinishingPayload.from(job.finishing)
         return current.copy(

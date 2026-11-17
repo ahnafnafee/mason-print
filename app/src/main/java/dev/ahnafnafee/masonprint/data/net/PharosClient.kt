@@ -24,6 +24,7 @@ import dev.ahnafnafee.masonprint.data.model.toJsonObject
 import dev.ahnafnafee.masonprint.data.model.toJsonObjects
 import java.io.IOException
 import java.net.URLEncoder
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import java.io.File
 import kotlinx.coroutines.Dispatchers
@@ -33,6 +34,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.ConnectionPool
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -64,7 +66,13 @@ class PharosClient(
     @Volatile var apiVersion: String? = null
     private val notifications by lazy { PharosNotifications(http) }
     private val deleteHttp by lazy {
-        http.newBuilder().retryOnConnectionFailure(false).followRedirects(false).followSslRedirects(false).build()
+        // A one-shot cancel cannot recover from a stale pooled socket. Start it on a fresh connection.
+        http.newBuilder()
+            .connectionPool(ConnectionPool(0, 1, TimeUnit.MINUTES))
+            .retryOnConnectionFailure(false)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .build()
     }
 
     suspend fun watchQueueChanges(target: PharosTarget, onChanged: suspend () -> Unit) {

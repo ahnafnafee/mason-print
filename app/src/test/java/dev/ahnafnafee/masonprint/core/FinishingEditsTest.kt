@@ -53,6 +53,14 @@ class FinishingEditsTest {
         assertTrue(FinishingEdits(mono = true).unsupportedFor(job()).isEmpty())
     }
 
+    @Test fun `apply requires a change to at least one document`() {
+        val documents = listOf(job(), job(color = "true", mono = "No"))
+        assertFalse(FinishingEdits(mono = false).changesAny(documents))
+        assertFalse(FinishingEdits(copies = 1).changesAny(documents))
+        assertTrue(FinishingEdits(mono = true).changesAny(documents))
+        assertTrue(FinishingEdits(copies = 2).changesAny(documents))
+    }
+
     @Test fun `unsupported sides and copies do not prevent a colour edit`() {
         val restricted = job(color = "true").copy(
             supportedFinishing = dev.ahnafnafee.masonprint.data.model.SupportedFinishing(

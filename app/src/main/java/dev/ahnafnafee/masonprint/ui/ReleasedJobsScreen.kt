@@ -15,10 +15,12 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import dev.ahnafnafee.masonprint.core.printDocumentName
 import dev.ahnafnafee.masonprint.core.AppState
 import dev.ahnafnafee.masonprint.core.CancelVerdict
 import dev.ahnafnafee.masonprint.core.Session
 import dev.ahnafnafee.masonprint.core.canAttemptCancellation
+import dev.ahnafnafee.masonprint.core.unmatchedPrintTransactions
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -26,7 +28,7 @@ import java.time.format.FormatStyle
 
 @Composable
 fun ReleasedJobsScreen(state: AppState, session: Session, router: Router) {
-    LaunchedEffect(state.host, state.user?.accountKey) { session.refreshReleaseHistory() }
+    LaunchedEffect(state.signedIn, state.host, state.user?.accountKey) { session.refreshReleaseHistory() }
     ReleasedJobsContent(state, onBack = { router.pop() }, onRefresh = session::refreshReleaseHistory,
         onCancel = session::attemptReleaseCancellation, onClear = session::clearReleaseHistory,
         onStatement = { router.push(Route.Statement) })
@@ -43,53 +45,54 @@ internal fun ReleasedJobsContent(
 ) {
     var clearing by rememberSaveable { mutableStateOf(false) }
     var cancelId by rememberSaveable { mutableStateOf<String?>(null) }
+    val printTransactions = remember(state.releaseHistory, state.releaseTransactions) {
+        unmatchedPrintTransactions(state.releaseHistory, state.releaseTransactions.orEmpty())
+    }
     val cancellationAvailable = state.signedIn && state.busy == null && state.upload == null && state.cancellingReleaseId == null
+    val canClearReceipts = !state.releasing && state.cancellingReleaseId == null
     Scaffold(topBar = {
         TopAppBar(title = { Text("Released jobs") }, navigationIcon = {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
         }, actions = {
-            IconButton(onClick = onRefresh, enabled = state.signedIn && !state.checkingReleaseHistory && state.releaseHistory.isNotEmpty()) {
-                Icon(Icons.Filled.Refresh, "Check recent charges")
+            IconButton(onClick = onRefresh, enabled = state.signedIn && !state.checkingReleaseHistory) {
+                Icon(Icons.Filled.Refresh, "Refresh released jobs")
             }
         })
     }) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
-                Text("Charges confirm billing, not printed pages. GMU does not report a live queue after release.",
+                Text("See release receipts from this phone and recent print charges from your Pharos statement. Check the printer for output.",
                     style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 TextButton(onClick = onStatement) { Text("View statement") }
             }
             if (state.checkingReleaseHistory) item {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
-                Text("Checking recent charges…", style = MaterialTheme.typography.bodySmall)
+                Text("Checking recent print activity…", style = MaterialTheme.typography.bodySmall)
             }
             state.releaseHistoryFailure?.let { failure -> item {
                 FailureSummary(failure)
-                TextButton(onClick = onRefresh, enabled = !state.checkingReleaseHistory) { Text("Retry charge check") }
+                TextButton(onClick = onRefresh, enabled = !state.checkingReleaseHistory) { Text("Retry") }
             } }
-            if (state.releaseHistory.isEmpty()) item {
-                Text("No release receipts yet", style = MaterialTheme.typography.titleMedium)
-                Text("Releases made in this app appear here. Your statement also includes charges from other print methods.",
-                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (state.releaseHistory.isEmpty() && printTransactions.isEmpty() && state.releaseTransactions != null &&
+                !state.checkingReleaseHistory && state.releaseHistoryFailure == null) item {
+                Text("No recent print activity", style = MaterialTheme.typography.titleMedium)
             }
+            if (state.releaseHistory.isNotEmpty()) item { SectionLabel("Release receipts") }
             items(state.releaseHistory, key = { it.id }) { record ->
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(record.name, style = MaterialTheme.typography.titleMedium)
                         Text(record.printerName, style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(activityTime(record.requestedAt), style = MaterialTheme.typography.bodySmall,
+                        Text(activityTime(Instant.ofEpochMilli(record.requestedAt)), style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(record.status, style = MaterialTheme.typography.labelLarge)
                         record.charge?.let { charge ->
                             val (bg, fg) = MasonToneSurfaces(if (charge.chargedTo?.contains("Cost Center", true) == true) MasonTone.Grant else MasonTone.Neutral)
                             Surface(color = bg, contentColor = fg, shape = MaterialTheme.shapes.medium) {
                                 Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    val amount = state.capabilities?.formats?.money(charge.amount) ?: charge.amount?.toString()
-                                    Text(listOfNotNull(amount, charge.pages?.let { "$it page${if (it == 1L) "" else "s"}" }).joinToString(" · "),
-                                        style = MaterialTheme.typography.titleSmall)
-                                    charge.chargedTo?.let { Text("Charged to $it", style = MaterialTheme.typography.bodySmall) }
+                                    PrintChargeDetails(state, charge.amount, charge.pages, charge.chargedTo)
                                     Text("Matched by document and release time", style = MaterialTheme.typography.bodySmall)
                                 }
                             }
@@ -114,7 +117,13 @@ internal fun ReleasedJobsContent(
                                         else -> "Cancellation unconfirmed"
                                     }, style = MaterialTheme.typography.labelLarge)
                                     if (state.cancellingReleaseId == record.id) LinearProgressIndicator(Modifier.fillMaxWidth())
-                                    else Text(result.message, style = MaterialTheme.typography.bodyMedium)
+                                    else {
+                                        Text(result.message, style = MaterialTheme.typography.bodyMedium)
+                                        if (result.verdict == CancelVerdict.Refused) {
+                                            Text("If the job is still printing, use the printer’s cancel control if available.",
+                                                style = MaterialTheme.typography.bodySmall)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -126,15 +135,30 @@ internal fun ReleasedJobsContent(
                 }
             }
             if (state.releaseHistory.isNotEmpty()) item {
-                Text("Up to 100 receipts, cleared at sign-out. Charge checks cover up to 300 recent statement entries.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                TextButton(onClick = { clearing = true }, enabled = state.cancellingReleaseId == null) { Text("Clear receipts") }
+                TextButton(onClick = { clearing = true }, enabled = canClearReceipts) { Text("Clear receipts") }
+            }
+            if (printTransactions.isNotEmpty()) {
+                item { SectionLabel("Print charges from your statement") }
+                items(printTransactions) { transaction ->
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(transaction.printDocumentName ?: "Print charge", style = MaterialTheme.typography.titleMedium)
+                            (transaction.printer ?: transaction.device)?.takeIf(String::isNotBlank)?.let {
+                                Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            transaction.at?.let {
+                                Text(activityTime(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            PrintChargeDetails(state, transaction.amount, transaction.pages, transaction.chargedTo)
+                        }
+                    }
+                }
             }
         }
     }
     if (clearing) AlertDialog(onDismissRequest = { clearing = false }, title = { Text("Clear release receipts?") },
         text = { Text("This removes local receipts and cancellation results. It does not cancel jobs or change your statement.") },
-        confirmButton = { TextButton(onClick = { onClear(); clearing = false }, enabled = state.cancellingReleaseId == null) { Text("Clear receipts") } },
+        confirmButton = { TextButton(onClick = { onClear(); clearing = false }, enabled = canClearReceipts) { Text("Clear receipts") } },
         dismissButton = { TextButton(onClick = { clearing = false }) { Text("Keep receipts") } })
     state.releaseHistory.firstOrNull { it.id == cancelId }?.let { record ->
         AlertDialog(onDismissRequest = { cancelId = null }, title = { Text("Try to cancel this job?") },
@@ -152,5 +176,13 @@ internal fun ReleasedJobsContent(
     }
 }
 
-private fun activityTime(time: Long): String = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
-    .withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(time))
+@Composable
+private fun PrintChargeDetails(state: AppState, amount: Double?, pages: Long?, chargedTo: String?) {
+    val money = state.capabilities?.formats?.money(amount) ?: amount?.toString()
+    val details = listOfNotNull(money, pages?.let { "$it page${if (it == 1L) "" else "s"}" })
+    if (details.isNotEmpty()) Text(details.joinToString(" · "), style = MaterialTheme.typography.titleSmall)
+    chargedTo?.let { Text("Charged to $it", style = MaterialTheme.typography.bodySmall) }
+}
+
+private fun activityTime(time: Instant): String = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
+    .withZone(ZoneId.systemDefault()).format(time)
