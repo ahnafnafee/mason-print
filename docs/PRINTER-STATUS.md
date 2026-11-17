@@ -1,18 +1,22 @@
 # Released jobs, charges and cancellation
 
-Open **Released jobs and charges** from the queue to see releases made in this app. Each receipt records the document, selected printer, request time and release acknowledgement. It is saved before sending, so a lost response stays **Release unconfirmed**. The latest 100 receipts are encrypted when saved, scoped to the account and server, and cleared on sign-out. **Clear receipts** removes local history only.
+Open **Released jobs and charges** from the queue to see release receipts and recent Pharos statement charges. Each receipt records the document, selected printer, request time and release acknowledgement. It is saved before sending, so a lost response stays **Release unconfirmed**. The latest 100 receipts are encrypted when saved, scoped to the account and server, and cleared on sign-out. Recent print charges can still appear after sign-out and sign-in, or when the job was released through another client. **Clear receipts** removes local receipts only.
 
 ## What a receipt can tell you
 
 **Release accepted** means Pharos acknowledged the release request. **Print charge found** means a unique matching `Print` transaction was found in your statement. The receipt shows its amount, page count and `ChargedTo` funding source when supplied. A transaction proves billing, not physical output: GMU's charges-only release test produced a Print transaction without printing a page.
 
-Use **View statement** for the full billing history, including other print methods. Refresh on the receipts screen checks recent charges again. A missing or ambiguous match remains unconfirmed; it does not mean the release failed or was free.
+Use **View statement** for the full billing history. Refresh on the receipts screen checks recent charges again. A charge with a unique receipt match appears on that receipt. Other print charges appear under **Print charges from your statement**.
 
 GMU starts sending a job to the printer immediately after release. In the supplied September 2026 live evidence, released jobs disappeared from every user queue view within a second. The old job resource still returned a stale `Queued` state. Consequently, receipts never read a subsequent print state from that resource or infer completion from an empty queue. The API's user queue filters expose only `Queued` and `Held`, not a reliable post-release pending queue.
 
 ## Try to cancel
 
-Choose **Try to cancel** on the receipt and confirm the document and printer. The app sends `DELETE /printjobs` with `{"PrintJobs":[{"Location":"<original job location>"}]}` through the signed-in Pharos connection. It does not guess a printer job number from the document name or transaction. Only the newest receipt for the same original location can attempt cancellation.
+Before release, select the jobs in the queue, open **More actions**, and choose **Cancel print job** or **Cancel print jobs**. At a GMU Canon station you can also select the queued job and tap **Delete**. [GMU Self Print Instructions](https://printandmail.gmu.edu/printinstructions/)
+
+After release, open **Released jobs and cancellation** from the result, then choose **Try to cancel** on the receipt. The app sends `DELETE /printjobs` with `{"PrintJobs":[{"Location":"<original job location>"}]}` through the signed-in Pharos connection. The newest receipt for that location carries the cancellation control. Statement rows have billing information and lack a Pharos job location.
+
+If printing has started, try the printer’s **Stop** or **Status Monitor** controls if they are available for your job. [Canon print job cancellation guide](https://oip.manual.canon/USRMA-5488-zz-CS-5800-enUS/contents/devu-basicope-cancel.html)
 
 The receipt keeps the server's result:
 
@@ -20,11 +24,11 @@ The receipt keeps the server's result:
 - **Cancellation refused:** the server returned a per-job refusal. Its sentence is shown with HTML entities decoded. GMU's live response reported that the Secure Release `DeleteJob` operation failed because the job was already being printed.
 - **Cancellation unconfirmed:** no clear acknowledgement for that job arrived. The app does not automatically retry. Check at the printer before deliberately trying again.
 
-HTTP 200 alone is not success. GMU returns per-job failures with `Status:300` and `ErrorCode:TranslationNotFound` inside a successful HTTP response. An SRS “does not exist in the database” response is also a refusal, not proof of cancellation. Cancellation uses a one-shot body with transport retries and redirects disabled to prevent automatic replay, including OkHttp's response-driven `503 Retry-After: 0` retry.
+GMU can return HTTP 200 with a per-job refusal such as `Status:300` and `ErrorCode:TranslationNotFound`. An SRS “does not exist in the database” response is also a refusal. Each cancellation opens a fresh connection and sends a one-shot body with transport retries and redirects disabled, including OkHttp's response-driven `503 Retry-After: 0` retry.
 
 ## How charge checks are bounded
 
-While the app is visible, a new receipt starts up to five checks with a one-minute overall limit. Checks stop when recent receipts have matches, when they are more than two minutes old, or when the foreground session ends. Opening the receipts screen or tapping refresh permits a new manual check. One check fetches at most three pages and keeps at most 300 recent transactions, requesting descending transaction identifiers. Short pages advance by their actual length; repeated or empty pages stop the read. A failed read retains previously matched evidence.
+While the app is visible, a new receipt starts up to five checks with a one-minute overall limit. Checks stop when recent receipts have matches, when they are more than two minutes old, or when the foreground session ends. Opening Released Jobs or tapping refresh checks the statement even if there are no receipts. One check fetches at most three pages and keeps at most 300 recent transactions, newest first by time. Short pages advance by their actual length, and repeated or empty pages stop the read. A failed read retains the previously loaded charges and receipt matches.
 
 Matching requires a Print transaction identifier, a document name match, and a timestamp from five seconds before to two minutes after the release request. If the ledger publishes a printer or device, it must match the selected printer. Both the receipt and transaction must have exactly one candidate; repeated names and competing charges remain unmatched. Existing matches are retained and cannot be reused. This is a billing correlation, not a server-provided release identifier.
 

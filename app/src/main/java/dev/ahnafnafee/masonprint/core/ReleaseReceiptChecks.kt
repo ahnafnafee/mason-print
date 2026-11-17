@@ -37,7 +37,7 @@ internal suspend fun readReleaseTransactions(fetch: suspend (Int, Int) -> ApiRes
 internal fun cancellationVerdict(result: JobOperationResult, location: String, attemptedAt: Long): ReleaseCancellation {
     val row = result.responses.filter { it.strIn("Location", "JobLocation") == location }.singleOrNull()
         ?: return ReleaseCancellation(CancelVerdict.Unconfirmed, "The server did not return a clear cancellation result for this job.", attemptedAt)
-    val status = row.dbl("Status")?.toInt()
+    val status = (row.dbl("Status") ?: row.dbl("StatusCode"))?.toInt()
     val error = row.strIn("ErrorCode", "Error")
     val success = row.boolIn("Success", "Succeeded", "IsSuccess")
     val sentence = sequenceOf("UserMessage", "Message", "DeveloperMessage")

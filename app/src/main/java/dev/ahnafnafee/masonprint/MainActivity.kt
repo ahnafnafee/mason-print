@@ -1,7 +1,6 @@
 package dev.ahnafnafee.masonprint
 
 import android.content.Intent
-import android.content.res.Configuration
 import android.graphics.Color.TRANSPARENT
 import android.graphics.drawable.ColorDrawable
 import android.net.Uri
@@ -15,13 +14,20 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.core.view.WindowCompat
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import dev.ahnafnafee.masonprint.core.AppGraph
 import dev.ahnafnafee.masonprint.core.MpLog
 import dev.ahnafnafee.masonprint.core.Session
@@ -35,7 +41,6 @@ import dev.ahnafnafee.masonprint.ui.DiagnosticsScreen
 import dev.ahnafnafee.masonprint.ui.PrintCenterWebView
 import dev.ahnafnafee.masonprint.ui.theme.MasonPrintTheme
 import dev.ahnafnafee.masonprint.ui.theme.ThemeChoice
-import dev.ahnafnafee.masonprint.ui.theme.ThemeMode
 import dev.ahnafnafee.masonprint.ui.theme.isDark
 
 /**
@@ -84,26 +89,22 @@ class MainActivity : ComponentActivity() {
         ThemeChoice.restore(graph.prefs)
         // The platform theme's windowBackground is a fixed light colour, so a dark-themed app would
         // flash white for the frame before Compose draws. Paint it to match the resolved theme.
+        val startupDark = ThemeChoice.mode.isDark(resources.configuration)
         window.setBackgroundDrawable(
-            ColorDrawable(if (darkAtStartup()) START_BACKGROUND_DARK else START_BACKGROUND_LIGHT),
+            ColorDrawable(if (startupDark) START_BACKGROUND_DARK else START_BACKGROUND_LIGHT),
         )
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.auto(TRANSPARENT, TRANSPARENT) { ThemeChoice.mode.isDark(it.configuration) },
+            navigationBarStyle = SystemBarStyle.auto(TRANSPARENT, TRANSPARENT) { ThemeChoice.mode.isDark(it.configuration) },
+        )
+        val systemBars = WindowCompat.getInsetsController(window, window.decorView)
 
         setContent {
-            val dark = ThemeChoice.mode.isDark()
-            /*
-             * Edge-to-edge has to follow *this app's* choice, not the phone's.
-             *
-             * `enableEdgeToEdge()` with no arguments decides the system-bar glyph colour from the
-             * system configuration. Force Dark in the app while the phone is Light and it draws black
-             * glyphs for a light background over a #111318 surface: the clock and the battery icon
-             * disappear. Passing `detectDarkMode` makes the bars follow the theme actually on screen,
-             * and re-running it on change keeps them in step with the toggle.
-             */
-            LaunchedEffect(dark) {
-                enableEdgeToEdge(
-                    statusBarStyle = SystemBarStyle.auto(TRANSPARENT, TRANSPARENT) { dark },
-                    navigationBarStyle = SystemBarStyle.auto(TRANSPARENT, TRANSPARENT) { dark },
-                )
+            // Android can reset the glyph colors when the system theme changes, even in app override mode.
+            val dark = ThemeChoice.mode.isDark(LocalConfiguration.current)
+            SideEffect {
+                systemBars.isAppearanceLightStatusBars = !dark
+                systemBars.isAppearanceLightNavigationBars = !dark
             }
 
             MasonPrintTheme(darkTheme = dark) {
@@ -129,16 +130,16 @@ class MainActivity : ComponentActivity() {
                 // arrived.
                 BackHandler(enabled = router.canGoBack) { router.pop() }
 
-                AppRoot(
-                    session = session,
-                    state = state,
-                    graph = graph,
-                    router = router,
-                    preparingDocuments = preparingShare,
-                    onPickDocument = {
-                        picker.launch(arrayOf("*/*"))
-                    },
-                )
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
+                    AppRoot(
+                        session = session,
+                        state = state,
+                        graph = graph,
+                        router = router,
+                        preparingDocuments = preparingShare,
+                        onPickDocument = { picker.launch(arrayOf("*/*")) },
+                    )
+                }
             }
         }
 
@@ -247,21 +248,6 @@ class MainActivity : ComponentActivity() {
         runCatching {
             contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-    }
-
-    /**
-     * Which theme is in force before Compose runs.
-     *
-     * [ThemeMode.System] is the only one that has to ask the platform, and at this point that means
-     * reading the configuration directly: `isSystemInDarkTheme()` is a composable and there is no
-     * composition yet.
-     */
-    private fun darkAtStartup(): Boolean = when (ThemeChoice.mode) {
-        ThemeMode.Light -> false
-        ThemeMode.Dark -> true
-        ThemeMode.System ->
-            (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
-                Configuration.UI_MODE_NIGHT_YES
     }
 
     private companion object {

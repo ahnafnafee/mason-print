@@ -139,7 +139,12 @@ fun AppRoot(
     LaunchedEffect(state.codeResolved) {
         if (state.codeResolved) {
             ReleaseHandoff.openedFromCode = true
-            router.push(Route.Confirm)
+            if (state.chosen.any { it.pending }) {
+                router.reviewSelectedPrinter()
+            } else {
+                router.reset(Route.Queue)
+                session.notify("Printer selected. Select the documents you want to print.")
+            }
             session.consumeResolvedCode()
         }
     }
@@ -150,9 +155,8 @@ fun AppRoot(
     }
 
     /*
-     * The queue hosts the snackbar in its own Scaffold, where Material anchors it above the bottom
-     * bar; everywhere else this Scaffold hosts it. Exactly one host is composed at a time, so a
-     * notice never shows twice, and never again lands on top of the Release pill.
+     * Screens with bottom actions host the snackbar in their own Scaffold so notices sit above the
+     * controls. Other destinations share the overlay below.
      */
     Box(Modifier.fillMaxSize()) {
         when (val route = router.current) {
@@ -227,7 +231,7 @@ fun AppRoot(
             Route.PrinterFilter -> PrinterFilterScreen(state, onBack = { router.pop() })
             Route.Help -> HelpScreen(onBack = { router.pop() })
             Route.Preview -> PreviewScreen(state, session, onBack = { router.pop() })
-            Route.Confirm -> ConfirmRelease(state, session, router)
+            Route.Confirm -> ConfirmRelease(state, session, router, snackbar)
             Route.Result -> ReleaseResult(state, session, router)
             Route.ReleasedJobs -> ReleasedJobsScreen(state, session, router)
 
@@ -235,7 +239,7 @@ fun AppRoot(
             Route.CostCenters -> CostCentersScreen(state, session, router)
             Route.AddFunds -> AddFundsScreen(state, session, router)
         }
-        if (router.current != Route.Queue) {
+        if (router.current != Route.Queue && router.current != Route.Confirm) {
             SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).safeDrawingPadding().imePadding())
         }
     }

@@ -29,8 +29,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.verticalScroll
-import dev.ahnafnafee.masonprint.ui.theme.ThemeChoice
-import dev.ahnafnafee.masonprint.ui.theme.isDark
+import dev.ahnafnafee.masonprint.ui.theme.LocalMasonDarkTheme
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.runtime.remember
@@ -128,30 +127,13 @@ internal fun ConnectScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Spacer(Modifier.height(24.dp))
-        /*
-         * The university's mark, same artwork and same theme-picked variant as the sign-in screen.
-         * This is the first screen the app ever shows, and it asks which server to trust; carrying
-         * the mark here is what makes that question read as the university's rather than a
-         * stranger's. The reversed cut is used in dark mode because the wordmark is #333333 and
-         * would vanish against #111318.
-         */
         Column(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Image(
-                painter = painterResource(
-                    if (ThemeChoice.mode.isDark()) {
-                        R.drawable.mason_logo_vector_dark
-                    } else {
-                        R.drawable.mason_logo_vector
-                    },
-                ),
-                contentDescription = "George Mason University",
-                modifier = Modifier.width(212.dp),
-            )
+            MasonWordmark()
             Spacer(Modifier.height(12.dp))
-            Text("Mason Print", style = MaterialTheme.typography.headlineMedium)
+            Text("Mason Print", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurface)
         }
         Text(
             "Upload documents, choose a campus printer, and review the cost before printing.",
@@ -295,6 +277,16 @@ internal fun CertPrompt(
     }
 }
 
+@Composable
+private fun MasonWordmark() {
+    val artwork = if (LocalMasonDarkTheme.current) R.drawable.mason_logo_vector_dark else R.drawable.mason_logo_vector
+    Image(
+        painter = painterResource(artwork),
+        contentDescription = "George Mason University",
+        modifier = Modifier.width(212.dp),
+    )
+}
+
 // ------------------------------------------------------------------ 3. sign in
 
 @Composable
@@ -321,30 +313,9 @@ internal fun SignInScreen(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            /*
-             * The university's mark, on the page itself rather than on a white plate.
-             *
-             * The wordmark is #333333, which disappears against the dark theme's #111318, so dark
-             * mode gets the reversed artwork instead: identical geometry with the wordmark in white,
-             * and the green and gold left exactly as the university drew them.
-             *
-             * Chosen from the app's own theme rather than a `-night` resource qualifier. The
-             * qualifier follows the phone, and this app's light/dark setting is allowed to disagree
-             * with it, which is the same mismatch that left the status bar drawing black on black.
-             */
-            Image(
-                painter = painterResource(
-                    if (ThemeChoice.mode.isDark()) {
-                        R.drawable.mason_logo_vector_dark
-                    } else {
-                        R.drawable.mason_logo_vector
-                    },
-                ),
-                contentDescription = "George Mason University",
-                modifier = Modifier.width(212.dp),
-            )
+            MasonWordmark()
             Spacer(Modifier.height(12.dp))
-            Text("Mason Print", style = MaterialTheme.typography.titleLarge)
+            Text("Mason Print", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
             Text(
                 state.host + if (state.apiVersion != null) "  ·  API ${state.apiVersion}" else "",
                 style = MaterialTheme.typography.labelMedium,

@@ -50,6 +50,15 @@ internal fun mergeReleaseHistory(existing: List<ReleaseRecord>, additions: List<
 
 private fun documentName(raw: String): String = raw.htmlUnescaped().lineSequence().firstOrNull().orEmpty().trim()
 
+internal val Transaction.printDocumentName: String?
+    get() = jobName?.let(::documentName)?.takeIf(String::isNotEmpty) ?: descriptionHead
+
+internal fun unmatchedPrintTransactions(history: List<ReleaseRecord>, transactions: List<Transaction>): List<Transaction> {
+    val matched = history.mapNotNull { it.charge?.transactionId }.toSet()
+    return transactions.filter { it.transactionType.equals("Print", true) && it.identifier !in matched }
+        .distinctBy { it.identifier?.takeIf(String::isNotBlank) ?: it }
+}
+
 /** A heuristic billing match, never a physical-completion verdict or a cancellation target. */
 internal fun matchReleaseCharges(history: List<ReleaseRecord>, transactions: List<Transaction>, checkedAt: Long): List<ReleaseRecord> {
     val used = history.mapNotNull { it.charge?.transactionId }.toSet()
@@ -58,11 +67,11 @@ internal fun matchReleaseCharges(history: List<ReleaseRecord>, transactions: Lis
     }.distinctBy { it.identifier }
     // Matched receipts still block an ambiguous later charge for the same document.
     val candidates = history.associate { record ->
+        val name = documentName(record.name)
         record.id to available.filter { txn ->
             val at = requireNotNull(txn.at).toEpochMilli()
-            val name = txn.jobName?.takeIf(String::isNotBlank) ?: txn.descriptionHead.orEmpty()
             val printers = listOfNotNull(txn.printer, txn.device).filter(String::isNotBlank)
-            documentName(record.name).isNotBlank() && documentName(name) == documentName(record.name) &&
+            name.isNotBlank() && txn.printDocumentName == name &&
                 at in (record.requestedAt - 5_000)..(record.requestedAt + 120_000) &&
                 (printers.isEmpty() || printers.any { it.equals(record.printerName, true) || it == record.printerLocation })
         }

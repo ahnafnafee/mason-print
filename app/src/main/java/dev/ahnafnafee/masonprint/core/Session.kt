@@ -147,6 +147,8 @@ data class AppState(
     /** Per-job outcome of the release that just happened, for the Result screen. */
     val outcome: ReleaseOutcome? = null,
     val releaseHistory: List<ReleaseRecord> = emptyList(),
+    /** Recent statement rows for Released Jobs. Null until the first successful read. */
+    val releaseTransactions: List<Transaction>? = null,
     val checkingReleaseHistory: Boolean = false,
     val releaseHistoryFailure: PharosFailure? = null,
     val cancellingReleaseId: String? = null,
@@ -322,7 +324,7 @@ class Session(private val graph: AppGraph) {
     }
 
     fun clearReleaseHistory() {
-        if (_state.value.cancellingReleaseId != null) return
+        if (_state.value.releasing || _state.value.cancellingReleaseId != null) return
         _state.update { it.copy(releaseHistory = emptyList()) }
         saveReleaseHistory()
     }
@@ -350,7 +352,7 @@ class Session(private val graph: AppGraph) {
     private suspend fun checkReleaseHistory() {
         val target = graph.target ?: return
         val key = activityKey() ?: return
-        if (!_state.value.signedIn || _state.value.releaseHistory.isEmpty() || !receiptChecks.tryLock()) return
+        if (!_state.value.signedIn || !receiptChecks.tryLock()) return
         fun current() = graph.target === target && activityKey() == key && _state.value.signedIn
         try {
             _state.update { it.copy(checkingReleaseHistory = true, releaseHistoryFailure = null) }
@@ -370,8 +372,13 @@ class Session(private val graph: AppGraph) {
             when (result) {
                 is ApiResult.Err -> _state.update { it.copy(releaseHistoryFailure = result.failure) }
                 is ApiResult.Ok -> {
-                    _state.update { it.copy(releaseHistory = matchReleaseCharges(it.releaseHistory, result.value, System.currentTimeMillis())) }
-                    saveReleaseHistory()
+                    _state.update {
+                        it.copy(
+                            releaseTransactions = result.value,
+                            releaseHistory = matchReleaseCharges(it.releaseHistory, result.value, System.currentTimeMillis()),
+                        )
+                    }
+                    if (_state.value.releaseHistory.isNotEmpty()) saveReleaseHistory()
                 }
             }
         } finally {
@@ -638,6 +645,9 @@ class Session(private val graph: AppGraph) {
                             transactions = if (it.user?.accountKey == account) it.transactions else emptyList(),
                             outcome = null,
                             releaseHistory = loadReleaseHistory(target.savedAddress, account),
+                            releaseTransactions = null,
+                            releaseHistoryFailure = null,
+                            checkingReleaseHistory = false,
                             costCenter = remembered,
                             favouriteDevices = graph.prefs.favouriteDevicesFor(account),
                             recentDevices = graph.prefs.recentDevicesFor(account),
@@ -1344,13 +1354,18 @@ class Session(private val graph: AppGraph) {
      * Apply only the edited, supported fields to each job, then verify the stored settings.
      * A document can forbid colour changes while still accepting sides and copies.
      */
-    fun applyFinishing(jobs: List<PrintJob>, edits: FinishingEdits) {
-        val target = graph.target ?: return
-        if (jobs.isEmpty() || _state.value.updatingFinishing) return
-        val deviceLocation = _state.value.selectedDevice?.location
-        val costCenterCode = _state.value.costCenter
+    fun applyFinishing(requestedJobs: List<PrintJob>, edits: FinishingEdits, onVerified: () -> Unit = {}): Boolean {
+        val target = graph.target ?: return false
+        val before = _state.value
+        if (!before.signedIn || before.busy != null || before.upload != null || before.updatingFinishing ||
+            before.capabilities?.finishingUpdateAllowed == false) return false
+        val locations = requestedJobs.map { it.location }.toSet()
+        val jobs = before.jobs.filter { it.pending && it.location in locations }
+        if (jobs.size != locations.size || !edits.changesAny(jobs)) return false
+        val deviceLocation = before.selectedDevice?.location
+        val costCenterCode = before.costCenter
+        _state.update { it.copy(busy = "Updating print options", updatingFinishing = true) }
         scope.launch {
-            _state.update { it.copy(busy = "Updating ${jobs.size} job(s)", updatingFinishing = true) }
             try {
                 // Keep per-job writes and bounded verification retries. Unsupported fields are
                 // preserved before sending, so they cannot trigger an endless false mismatch.
@@ -1458,39 +1473,39 @@ class Session(private val graph: AppGraph) {
                         }) + restrictions).joinToString(" "),
                     )
                 }
+                if (readFailure == null && refused.isEmpty() && remaining.isEmpty()) onVerified()
             } finally {
-                _state.update { it.copy(busy = null, updatingFinishing = false) }
+                _state.update { if (it.signedIn) it.copy(busy = null, updatingFinishing = false) else it }
             }
         }
+        return true
     }
 
     fun deleteJobs(jobs: List<PrintJob>) {
         val target = graph.target ?: return
-        if (jobs.isEmpty() || _state.value.busy != null || _state.value.upload != null) return
-        _state.update { it.copy(busy = "Deleting ${jobs.size} job(s)") }
+        val before = _state.value
+        if (!before.signedIn || before.busy != null || before.upload != null) return
+        val locations = jobs.map { it.location }.toSet()
+        val pending = before.jobs.filter { it.pending && it.location in locations }
+        if (pending.isEmpty()) return
+        val attemptedAt = System.currentTimeMillis()
+        _state.update { it.copy(busy = "Cancelling print jobs") }
         scope.launch {
-            when (val result = graph.api.deleteJobs(target, PrintRequests.delete(jobs))) {
+            when (val result = graph.api.deleteJobs(target, PrintRequests.delete(pending))) {
                 is ApiResult.Err -> _state.update { it.copy(busy = null, failure = result.failure) }
                 is ApiResult.Ok -> {
-                    val op = result.value
-                    val gone = op.actedLocations.size
+                    val answers = pending.associate { it.location to cancellationVerdict(result.value, it.location, attemptedAt) }
+                    val cancelled = answers.filterValues { it.verdict == CancelVerdict.Accepted }.keys
+                    val remaining = answers.values.filter { it.verdict != CancelVerdict.Accepted }
                     _state.update {
                         it.copy(
                             busy = null,
-                            selection = it.selection - op.actedLocations.toSet(),
-                            /**
-                             * Counted from the per-job rows, not from `jobs.size`. This endpoint also
-                             * answers 200 with a bare array, so a delete the server refused still
-                             * looks like a delete unless the rows are read — the redesign's "Deleted
-                             * 2 jobs from the server" has to be a claim the server actually made.
-                             */
+                            selection = it.selection - cancelled,
                             notice = when {
-                                op.failures.isNotEmpty() ->
-                                    op.failures.firstNotNullOfOrNull { r -> cleanSentence(r.strIn("UserMessage", "Message")?.htmlUnescaped()) }
-                                        ?: "${op.failures.size} of ${jobs.size} job(s) could not be deleted."
-
-                                gone == 0 -> "The server did not confirm the delete. Pull to refresh."
-                                else -> "Deleted $gone job${if (gone == 1) "" else "s"} from the server."
+                                pending.size == 1 && remaining.isNotEmpty() -> remaining.single().message
+                                remaining.isNotEmpty() -> "Cancellation confirmed for ${cancelled.size} of ${pending.size} jobs. ${remaining.first().message}"
+                                cancelled.size == 1 -> "Print job cancelled"
+                                else -> "${cancelled.size} print jobs cancelled"
                             },
                             noticeAction = SnackAction.ViewQueue,
                         )

@@ -8,7 +8,6 @@ package dev.ahnafnafee.masonprint.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -31,6 +30,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -73,6 +73,8 @@ import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
@@ -104,6 +106,7 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import dev.ahnafnafee.masonprint.core.AppState
 import dev.ahnafnafee.masonprint.core.CostPreview
+import dev.ahnafnafee.masonprint.core.FinishingEdits
 import dev.ahnafnafee.masonprint.core.ReleaseOutcome
 import dev.ahnafnafee.masonprint.core.Session
 import dev.ahnafnafee.masonprint.core.deviceTokenFromQr
@@ -137,9 +140,6 @@ import dev.ahnafnafee.masonprint.ui.theme.currentMasonColors
  * the sticker has been printed over by a label or the panel is a touchscreen whose QR is only a link
  * to GMU's web page (docs/FINDINGS.md §8.5). Deviations are one line each in the port report.
  */
-
-/** The canonical money sentence, Spec §2.0.7 `charge_timing`. Quoted verbatim; do not paraphrase. */
-private const val ChargeTiming = "You are charged when you release this at a printer, not now."
 
 /**
  * Navigation scratch for "this printer was picked by a code, not from the list" (§4 scenario 16).
@@ -213,7 +213,8 @@ fun ReleaseScreen(
     session: Session,
     router: Router,
 ) {
-    Scaffold(modifier = Modifier.imePadding(), topBar = { ReleaseTopBar("Release at a printer", onBack = { router.pop() }) }) { bar ->
+    val title = if (state.chosen.isEmpty()) "Printers" else "Choose printer"
+    Scaffold(modifier = Modifier.imePadding(), topBar = { ReleaseTopBar(title, onBack = { router.pop() }) }) { bar ->
         var mode by rememberSaveable { mutableStateOf("printers") }
         var query by rememberSaveable { mutableStateOf("") }
         var pasted by rememberSaveable { mutableStateOf("") }
@@ -225,7 +226,6 @@ fun ReleaseScreen(
         // before device paging fetched every page. Guarding on `isEmpty` would pin the first cache
         // forever, which is how a stale printer list outlives the printer.
         LaunchedEffect(Unit) {
-            ReleaseHandoff.openedFromCode = false
             session.loadDevices()
         }
         LaunchedEffect(code, pasted) { notFound = null }
@@ -240,7 +240,12 @@ fun ReleaseScreen(
 
         val pick: (Device) -> Unit = { device ->
             session.selectDevice(device)
-            router.push(Route.Confirm)
+            if (state.chosen.any { it.pending }) {
+                router.reviewSelectedPrinter()
+            } else {
+                router.reset(Route.Queue)
+                session.notify("Printer selected. Select the documents you want to print.")
+            }
         }
         // The pickup both code paths share. `Device.matchesToken` accepts a bare Location, a
         // URL ending in it, an asset tag, or a serial — the shapes the sticker and the
@@ -309,18 +314,11 @@ fun ReleaseScreen(
             contentPadding = MasonScreenPadding,
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            item(key = "intro") {
-                val selected = state.chosen
-                if (selected.isEmpty()) {
-                    NoteCard(
-                        title = "Nothing selected",
-                        body = "Go back to the queue and pick the jobs you want at the printer. " +
-                            "The selection is kept while you choose the printer.",
-                        icon = Icons.Filled.Inbox,
-                    )
-                } else {
+            if (state.chosen.isNotEmpty()) {
+                item(key = "intro") {
+                    val count = state.chosen.size
                     Text(
-                        "${selected.size} ${jobWord(selected.size)} selected · ${state.fundingLabel}",
+                        "$count ${jobWord(count)} selected",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -353,7 +351,10 @@ fun ReleaseScreen(
                     recent = recent,
                     rest = restDevices,
                     favouriteLocations = state.favouriteDevices,
-                    onPick = pick,
+                    onPick = {
+                        ReleaseHandoff.openedFromCode = false
+                        pick(it)
+                    },
                     onToggleFavourite = session::toggleFavouriteDevice,
                     onReload = session::loadDevices,
                 )
@@ -840,29 +841,49 @@ fun ConfirmRelease(
     state: AppState,
     session: Session,
     router: Router,
+    snackbar: SnackbarHostState,
 ) {
-    Scaffold(topBar = { ReleaseTopBar("Confirm release", onBack = { router.pop() }) }) { bar ->
-        val reduced = rememberReducedMotion()
+    LaunchedEffect(state.outcome) {
+        if (state.outcome != null) router.replaceTop(Route.Result)
+    }
 
-        // A confirmed release may finish while this screen is still visible.
-        LaunchedEffect(state.outcome) {
-            if (state.outcome != null) router.replaceTop(Route.Result)
+    val chosen = state.chosen
+    val device = state.selectedDevice
+    val canReview = chosen.isNotEmpty() && chosen.all { it.pending } && device != null
+    var printOptions by remember(chosen.map { it.location }) { mutableStateOf(FinishingEdits()) }
+    val hasDraftOptions = printOptions != FinishingEdits()
+    val canEditOptions = state.capabilities?.finishingUpdateAllowed != false
+    val optionsEnabled = state.busy == null && state.upload == null
+    var preview by remember(chosen, device, state.costCenter) { mutableStateOf<CostPreview?>(null) }
+    var retryPrice by remember { mutableStateOf(0) }
+    LaunchedEffect(chosen, device, state.costCenter, state.updatingFinishing, retryPrice) {
+        preview = null
+        if (canReview && !state.updatingFinishing) {
+            val request = session.previewCost(chosen) { preview = it }
+            try { request?.join() } finally { request?.cancel() }
         }
+    }
 
-        // The price is asked for, never computed here: POST /printjobs/cost answers per job, and a
-        // local sum would disagree with the portal. CostPreview is not Saveable, so it is `remember`
-        // — on rotation the ask simply runs again, which is what a price check should do anyway.
-        val selected = state.chosen
-        var preview by remember(selected, state.selectedDevice, state.costCenter) { mutableStateOf<CostPreview?>(null) }
-        var retryPrice by remember { mutableStateOf(0) }
-        LaunchedEffect(selected, state.selectedDevice, state.costCenter, retryPrice) {
-            preview = null
-            if (selected.isNotEmpty() && selected.all { it.pending } && state.selectedDevice != null) {
-                val request = session.previewCost(selected) { preview = it }
-                try { request?.join() } finally { request?.cancel() }
-            }
-        }
-
+    Scaffold(
+        topBar = { ReleaseTopBar("Review and release", onBack = { router.pop() }) },
+        snackbarHost = { SnackbarHost(snackbar) },
+        bottomBar = {
+            if (canReview) ReleaseReviewBar(
+                state = state,
+                preview = preview,
+                hasDraftOptions = hasDraftOptions,
+                canApplyOptions = canEditOptions && optionsEnabled && printOptions.changesAny(chosen),
+                onApplyOptions = {
+                    if (session.applyFinishing(chosen, printOptions, onVerified = { printOptions = FinishingEdits() })) {
+                        preview = null
+                    }
+                },
+                onDiscardOptions = { printOptions = FinishingEdits() },
+                onRetryPrice = { retryPrice++ },
+                onRelease = { session.releaseSelected(chosen) },
+            )
+        },
+    ) { bar ->
         Column(
             Modifier
                 .fillMaxSize()
@@ -871,9 +892,6 @@ fun ConfirmRelease(
                 .padding(MasonScreenPadding),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            val device = state.selectedDevice
-            val chosen = state.chosen
-
             if (device == null) {
                 EmptyState(
                     icon = Icons.Filled.Print,
@@ -881,7 +899,7 @@ fun ConfirmRelease(
                     body = "Choose a printer to check the price for your selected documents.",
                 )
                 Button(
-                    onClick = { if (router.canGoBack) router.pop() else router.replaceTop(Route.Release) },
+                    onClick = { router.replaceTop(Route.Release) },
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Pick a printer") }
                 Spacer(Modifier.height(MasonScrollSpacer))
@@ -905,7 +923,6 @@ fun ConfirmRelease(
                     body = "Return to the queue and select only documents that are waiting to release.", tone = MasonTone.Warn)
             }
 
-            // --- The printer, with its model line: a service-desk call starts by reading this. ----
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = MaterialTheme.shapes.large,
@@ -919,7 +936,6 @@ fun ConfirmRelease(
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                             stationRoom(station)?.let { Text(it, style = MaterialTheme.typography.titleSmall) }
                             MonoDetail(device.label)
-                            MonoDetail(device.sublabel)
                             if (ReleaseHandoff.openedFromCode) {
                                 // §4 scenario 16: say how the printer was reached; it changes what the
                                 // service desk would check first.
@@ -931,155 +947,160 @@ fun ConfirmRelease(
                             }
                         }
                     }
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        itemVerticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        val funding = state.costCenter?.takeIf(String::isNotBlank)?.let { "Charge to $it" } ?: "Pay with your balance"
+                        Text(funding, style = MaterialTheme.typography.bodyMedium)
+                        TextButton(
+                            onClick = { router.push(Route.Release) },
+                            enabled = !hasDraftOptions && state.busy == null && state.upload == null,
+                        ) { Text("Change printer") }
+                    }
                 }
             }
 
-            // --- Jobs this printer will take, and the ones it will be asked to leave behind. ------
-            SectionLabel("Selected documents")
-            chosen.forEach { job ->
+            chosen.singleOrNull()?.let { job ->
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    SectionLabel("Document")
+                    Text(job.name ?: "Untitled document", style = MaterialTheme.typography.titleMedium)
+                    val details = listOfNotNull(
+                        queuePageCount(job),
+                        job.finishing?.pagesPerSide?.takeIf { it > 1 }?.let { "$it pages per side" },
+                    )
+                    if (details.isNotEmpty()) Text(details.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+                }
+            }
+
+            if (canReview) {
+                SectionLabel("Print options")
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = MaterialTheme.shapes.large,
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
                 ) {
-                    Row(
-                        Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (chosen.size > 1) {
+                            Text("Applies to ${chosen.size} selected documents.", style = MaterialTheme.typography.bodyMedium)
+                        }
+                        PrintOptionControls(chosen, printOptions, canEditOptions, optionsEnabled) { printOptions = it }
+                    }
+                }
+            }
+
+            if (chosen.size > 1) {
+                SectionLabel("Selected documents")
+                chosen.forEach { job ->
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = MaterialTheme.shapes.large,
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
                     ) {
-                        Column(Modifier.weight(1f)) {
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(
-                                job.name ?: "Unnamed job",
+                                job.name ?: "Untitled document",
                                 style = MaterialTheme.typography.bodyLarge,
                                 maxLines = 2,
                             )
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp),
-                            ) {
-                                Text(
-                                    specLine(job),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+                            specLine(job).takeIf { it.isNotBlank() }?.let {
+                                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
-                        Text("Queue: ${releaseMoney(state, job.cost)}", style = MaterialTheme.typography.labelMedium)
                     }
                 }
             }
 
-            // --- The money, in the server's words. ------------------------------------------------
-            SectionLabel("Estimated total")
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = MaterialTheme.shapes.large,
-                color = MaterialTheme.colorScheme.surfaceContainerLow,
-            ) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Crossfade(targetState = preview, label = "price") { pv ->
-                        when {
-                            pv == null -> Row(
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                CircularProgressIndicator(Modifier.size(16.dp))
-                                Text(
-                                    "Asking the server what this costs…",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                )
-                            }
-
-                            pv.failed -> Text(
-                                "Could not check the price. Try again before releasing.",
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-
-                            else -> MoneyText(
-                                pv.totalText,
-                                modifier = Modifier.fillMaxWidth(),
-                                color = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                    }
-                    MasonHairline()
-                    Text("Pay with: ${state.fundingLabel}", style = MaterialTheme.typography.bodyMedium)
-                    Text("Applies to all ${chosen.size} selected ${jobWord(chosen.size)}.", style = MaterialTheme.typography.bodySmall)
-                    Text(
-                        "The server confirms the charge when you release. Check the result for each document.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    if (preview?.failed == true || preview?.blocked == true) {
-                        preview?.reason?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
-                        TextButton(onClick = { retryPrice++ }) { Text("Check price again") }
-                    }
-                }
-            }
-
-            // Arrears is information, never a gate: GMU answers with MinBalanceOverride: true, so
-            // an app-side block would refuse a release the server would have accepted (§7.1 #2/#11).
             val balance = state.balanceText
             if (balance != null && balance.contains('-')) {
                 NoteCard(
                     title = "Your balance is already $balance",
-                    body = "Releasing may lower this balance further. The server decides whether the selected funding source can pay.",
+                    body = "The server decides whether the selected funding source can pay.",
                     icon = Icons.Filled.Payments,
                     tone = MasonTone.Warn,
                 )
             }
-
             state.failure?.let { FailureNote(it, onDismiss = session::dismissFailure) }
-
-            // --- The one button, and the sentence under it. ---------------------------------------
-            val busy = state.busy
-            Button(
-                onClick = { session.releaseSelected(state.chosen) },
-                enabled = busy == null && !state.releasing && chosen.all { it.pending } && preview?.let { !it.failed && !it.blocked } == true,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
-            ) {
-                if (busy != null) {
-                    CircularProgressIndicator(
-                        Modifier.size(18.dp),
-                        color = MaterialTheme.colorScheme.onPrimary,
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Text(busy)
-                } else {
-                    Text("Release ${chosen.size} ${jobWord(chosen.size)} at ${device.label}", textAlign = TextAlign.Center)
-                }
+            if (!hasDraftOptions && (preview?.failed == true || preview?.blocked == true)) {
+                preview?.reason?.let { NoteCard(title = "Price unavailable", body = it, tone = MasonTone.Warn) }
             }
-            Text(
-                ChargeTiming,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            if (preview?.blocked == true) {
-                Text(
-                    "A price is not available for every selected document. Retry, or return to the queue to change your selection.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = currentMasonColors.warn,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-
-            Spacer(Modifier.height(MasonScrollSpacer))
         }
     }
 }
 
 @Composable
-private fun MoneyLine(label: String, amount: String) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f),
-        )
-        MoneyText(amount)
+private fun ReleaseReviewBar(
+    state: AppState,
+    preview: CostPreview?,
+    hasDraftOptions: Boolean,
+    canApplyOptions: Boolean,
+    onApplyOptions: () -> Unit,
+    onDiscardOptions: () -> Unit,
+    onRetryPrice: () -> Unit,
+    onRelease: () -> Unit,
+) {
+    val count = state.chosen.size
+    val priceAvailable = preview != null && !preview.failed && !preview.blocked
+    val canRelease = state.busy == null && state.upload == null && !state.releasing && priceAvailable
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shadowElevation = 6.dp,
+    ) {
+        Column(
+            Modifier.navigationBarsPadding().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            when {
+                state.updatingFinishing -> {
+                    Text("Applying print options…", style = MaterialTheme.typography.bodyMedium)
+                    return@Column
+                }
+                hasDraftOptions -> {
+                    FlowRow(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        itemVerticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Button(onClick = onApplyOptions, enabled = canApplyOptions) { Text("Apply print options") }
+                        TextButton(onClick = onDiscardOptions) { Text("Discard changes") }
+                    }
+                    return@Column
+                }
+                preview == null -> Text("Checking the price…", style = MaterialTheme.typography.bodyMedium)
+                priceAvailable -> Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("Estimated total", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                    Text(preview.totalText, style = MaterialTheme.typography.titleMedium)
+                }
+                else -> FlowRow(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    itemVerticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Price unavailable", style = MaterialTheme.typography.bodyMedium)
+                    TextButton(onClick = onRetryPrice) { Text("Check again") }
+                }
+            }
+            Button(
+                onClick = onRelease,
+                enabled = canRelease,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            ) {
+                Text(
+                    when {
+                        state.releasing -> "Releasing…"
+                        count == 1 -> "Release job"
+                        else -> "Release $count jobs"
+                    },
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
     }
 }
 
@@ -1186,6 +1207,14 @@ fun ReleaseResult(
                 }
             }
 
+            FilledTonalButton(
+                onClick = {
+                    session.clearOutcome()
+                    router.reset(Route.Queue)
+                    router.push(Route.ReleasedJobs)
+                }, modifier = Modifier.fillMaxWidth(),
+            ) { Text("Released jobs and cancellation") }
+
             SectionLabel("Each job")
             outcome.released.forEach { loc ->
                 val job = state.jobs.firstOrNull { it.location == loc }
@@ -1243,13 +1272,6 @@ fun ReleaseResult(
                 onClick = acknowledge,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
             ) { Text("Back to the queue") }
-            FilledTonalButton(
-                onClick = {
-                    session.clearOutcome()
-                    router.reset(Route.Queue)
-                    router.push(Route.ReleasedJobs)
-                }, modifier = Modifier.fillMaxWidth(),
-            ) { Text("View released jobs") }
             OutlinedButton(
                 onClick = {
                     clipboard.setText(

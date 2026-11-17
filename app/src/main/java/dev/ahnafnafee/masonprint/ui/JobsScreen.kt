@@ -6,8 +6,6 @@
 
 package dev.ahnafnafee.masonprint.ui
 
-import dev.ahnafnafee.masonprint.core.FinishingEdits
-
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FiniteAnimationSpec
@@ -66,6 +64,7 @@ import androidx.compose.material.icons.filled.PrintDisabled
 import androidx.compose.material.icons.filled.Savings
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Work
@@ -115,7 +114,6 @@ import dev.ahnafnafee.masonprint.core.Session
 import dev.ahnafnafee.masonprint.core.stillAwaitsCosting
 import dev.ahnafnafee.masonprint.data.model.CostCenter
 import dev.ahnafnafee.masonprint.data.model.Device
-import dev.ahnafnafee.masonprint.data.model.FinishingOptions
 import dev.ahnafnafee.masonprint.data.model.PrintJob
 import dev.ahnafnafee.masonprint.ui.theme.MasonType
 import dev.ahnafnafee.masonprint.ui.theme.MasonPillShape
@@ -163,7 +161,8 @@ fun JobsScreen(
 ) {
     var showReleased by rememberSaveable { mutableStateOf(false) }
     var fundingOpen by rememberSaveable { mutableStateOf(false) }
-    var copiesOpen by rememberSaveable { mutableStateOf(false) }
+    var printOptionLocations by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+    var jobsToCancel by remember { mutableStateOf<List<PrintJob>>(emptyList()) }
     // Not `rememberSaveable`: a cost preview is an answer to a question that was asked a second ago,
     // and after a rotation the honest thing is to ask again rather than quote a stale total.
     var costPreview by remember { mutableStateOf<CostPreview?>(null) }
@@ -184,7 +183,9 @@ fun JobsScreen(
      * Selection is deliberately *not* cleared here: the release flow reads `state.chosen`.
      */
     val estimate: () -> Unit = { session.previewCost(chosen) { preview -> costPreview = preview } }
-    val release: () -> Unit = { router.push(Route.Release) }
+    val release: () -> Unit = {
+        if (state.selectedDevice == null) router.push(Route.Release) else router.reviewSelectedPrinter()
+    }
 
     QueueScaffold(
         state = state,
@@ -207,11 +208,9 @@ fun JobsScreen(
              */
             onPrinter = { router.push(Route.Release) },
             onChargeTo = { fundingOpen = true },
-            onCopies = { copiesOpen = true },
+            onPrintOptions = { printOptionLocations = ArrayList(chosen.filter { it.pending }.map { it.location }) },
             onEstimate = estimate,
-            // No clearSelection here: `deleteJobs` keeps a refused job in the selection, which is
-            // the right state — it is still in the queue and still chosen.
-            onDelete = { session.deleteJobs(chosen) },
+            onCancelJobs = { jobsToCancel = chosen.filter { it.pending } },
             onRelease = release,
             onAddFunds = { router.push(Route.AddFunds) },
         ),
@@ -302,6 +301,7 @@ fun JobsScreen(
                         PreviewHandoff.location = job.location
                         router.push(Route.Preview)
                     },
+                    onPrintOptions = { printOptionLocations = arrayListOf(job.location) },
                 )
             }
 
@@ -329,18 +329,39 @@ fun JobsScreen(
         }
     }
 
-    if (copiesOpen) {
-        CopiesDialog(
-            jobs = chosen,
-            // The server's own switch (`PrintCenter."Finishing Options Update"`). Where a campus
-            // turns it off the controls are visible but inert, with the reason said out loud,
-            // rather than the dialog pretending the settings do not exist.
+    if (jobsToCancel.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { jobsToCancel = emptyList() },
+            title = { Text(if (jobsToCancel.size == 1) "Cancel print job?" else "Cancel print jobs?") },
+            text = {
+                val document = jobsToCancel.singleOrNull()?.name?.takeIf(String::isNotBlank)
+                Text(when {
+                    document != null -> "Remove $document from the print queue?"
+                    jobsToCancel.size == 1 -> "Remove this document from the print queue?"
+                    else -> "Remove ${jobsToCancel.size} documents from the print queue?"
+                })
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    session.deleteJobs(jobsToCancel)
+                    jobsToCancel = emptyList()
+                }, enabled = state.busy == null && state.upload == null) {
+                    Text(if (jobsToCancel.size == 1) "Cancel job" else "Cancel jobs")
+                }
+            },
+            dismissButton = { TextButton(onClick = { jobsToCancel = emptyList() }) { Text("Keep in queue") } },
+        )
+    }
+
+    val printOptionJobs = state.jobs.filter { it.pending && it.location in printOptionLocations }
+    if (printOptionJobs.isNotEmpty()) {
+        PrintOptionsDialog(
+            jobs = printOptionJobs,
             canEdit = state.capabilities?.finishingUpdateAllowed != false,
-            saving = state.updatingFinishing,
-            onDismiss = { copiesOpen = false },
-            onApply = { options ->
-                copiesOpen = false
-                session.applyFinishing(chosen, options)
+            enabled = state.busy == null && state.upload == null,
+            onDismiss = { printOptionLocations = arrayListOf() },
+            onApply = { edits ->
+                if (session.applyFinishing(printOptionJobs, edits)) printOptionLocations = arrayListOf()
             },
         )
     }
@@ -635,7 +656,7 @@ private fun ListHeader(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    if (showReleased) "All jobs" else "Waiting to release",
+                    if (showReleased) "All queue jobs" else "Waiting to release",
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f, fill = false),
                 )
@@ -675,7 +696,7 @@ private fun ListHeader(
              * them. The heading above changes with it, so the two always agree.
              */
             TextButton(onClick = { onToggleShowReleased(!showReleased) }) {
-                Text(if (showReleased) "Show waiting only" else "Show all jobs")
+                Text(if (showReleased) "Show waiting only" else "Show all queue jobs")
             }
         }
     }
@@ -704,6 +725,7 @@ private fun JobRow(
     reduced: Boolean,
     onToggle: (Boolean) -> Unit,
     onPreview: () -> Unit,
+    onPrintOptions: () -> Unit,
 ) {
     val radius by animateDpAsState(
         targetValue = if (checked) SelectedCardRadius else JobCardRadius,
@@ -792,19 +814,24 @@ private fun JobRow(
                     Text("Cost center: $it", style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Row(
+                Text(
+                    timingLine(job),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                FlowRow(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Text(
-                        timingLine(job),
-                        modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    if (job.pending) TextButton(
+                        onClick = onPrintOptions,
+                        modifier = Modifier.semantics { contentDescription = "Print options for ${job.name ?: "this document"}" },
+                    ) {
+                        ButtonGlyph(Icons.Filled.Tune)
+                        Text("Print options")
+                    }
                     TextButton(
                         onClick = onPreview,
                         modifier = Modifier.semantics { contentDescription = "Preview ${job.name ?: "this document"}" },
@@ -958,7 +985,7 @@ private fun QueueEmpty(
         showReleased -> {
             EmptyState(
                 title = "No jobs",
-                body = "This account has no jobs on this server, released or waiting.",
+                body = "The server queue is empty. See Released jobs and charges for print activity.",
                 icon = Icons.Filled.PrintDisabled,
             )
         }
@@ -1106,151 +1133,6 @@ private fun EstimateDialog(
             TextButton(onClick = onChargeTo) { Text("Pay with…") }
         },
     )
-}
-
-/**
- * Copies, sides and colour, as an editor.
- *
- * It was a read-back, on the grounds that GMU answers a `PATCH` to `{UserUri}/printjobs/` with 200
- * while sometimes echoing a value back unchanged, so a 200 is not proof the write took. That is
- * still true, and it argues for *not trusting the response*, not for having no controls: with no
- * editor here and none on the upload screen either, the app could not change a single print
- * setting, and this dialog's own advice to "change when uploading" pointed at a screen that has no
- * such control.
- *
- * The resolution is write-then-re-read. [Session.applyFinishing] PATCHes and refreshes, and the
- * queue redraws from what the server now reports, so a change that did not stick shows up as the
- * old value on the card rather than as a lie in a form. This dialog claims only that the change was
- * asked for.
- *
- * Mixed fields stay unchanged until explicitly edited. The draft is keyed by selection identity
- * so a queue refresh cannot discard choices while this dialog is open.
- */
-@Composable
-private fun CopiesDialog(
-    jobs: List<PrintJob>,
-    canEdit: Boolean,
-    saving: Boolean,
-    onDismiss: () -> Unit,
-    onApply: (FinishingEdits) -> Unit,
-) {
-    var edits by remember(jobs.map { it.location }.toSet()) { mutableStateOf(FinishingEdits()) }
-    fun <T> agreed(pick: (FinishingOptions) -> T): T? =
-        jobs.map { it.finishing?.let(pick) }.distinct().singleOrNull()
-    val copies = edits.copies ?: agreed { it.copies }
-    val duplex = edits.duplex ?: agreed { it.duplex }
-    val mono = edits.mono ?: agreed { it.mono }
-    val restrictions = jobs.mapNotNull { job ->
-        edits.unsupportedFor(job).takeIf { it.isNotEmpty() }?.let {
-            "${job.name ?: "Document"}: ${it.joinToString(" and ")} will stay unchanged."
-        }
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = { Icon(Icons.Filled.ContentCopy, null) },
-        title = { Text("Copies and finishing") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                if (jobs.isEmpty()) {
-                    Text("Select at least one job first.", style = MaterialTheme.typography.bodyMedium)
-                } else {
-                    Text(
-                        if (jobs.size == 1) jobs.single().name ?: "Untitled document" else "${jobs.size} documents",
-                        style = MaterialTheme.typography.titleSmall,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-
-                    // A stepper, not a text field: the count is small, and typing a number on a
-                    // phone to print two of something is a keyboard nobody needed.
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Copies", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                        OutlinedButton(
-                            onClick = { edits = edits.copy(copies = ((copies ?: 2L) - 1L).coerceAtLeast(1L)) },
-                            enabled = canEdit && !saving && (copies == null || copies > 1L),
-                        ) { Text("-", maxLines = 1) }
-                        Text(
-                            copies?.toString() ?: "Mixed",
-                            Modifier.width(64.dp),
-                            textAlign = TextAlign.Center,
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                        OutlinedButton(
-                            onClick = { edits = edits.copy(copies = ((copies ?: 0L) + 1L).coerceAtMost(99L)) },
-                            enabled = canEdit && !saving && (copies == null || copies < 99L),
-                        ) { Text("+", maxLines = 1) }
-                    }
-
-                    ChoiceRow(
-                        label = "Sides",
-                        options = listOf("One-sided" to false, "Two-sided" to true),
-                        selected = duplex,
-                        enabled = canEdit && !saving,
-                        onSelect = { edits = edits.copy(duplex = it) },
-                    )
-                    ChoiceRow(
-                        label = "Colour",
-                        options = listOf("Black & white" to true, "Colour" to false),
-                        selected = mono,
-                        enabled = canEdit && !saving,
-                        onSelect = { edits = edits.copy(mono = it) },
-                    )
-
-                    if (restrictions.isNotEmpty()) {
-                        Text(
-                            "The server limits these settings:\n" + restrictions.joinToString("\n"),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Text(
-                        if (saving) {
-                            "Saving the previous changes. Wait for the queue to update before editing again."
-                        } else if (canEdit) {
-                            "Only settings you change are applied to each document. The server reprices " +
-                                "the jobs, so the cost can change. Nothing is charged " +
-                                "until you release at a printer."
-                        } else {
-                            "This server does not accept finishing changes after upload."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = { onApply(edits) },
-                enabled = canEdit && !saving && jobs.isNotEmpty() && edits != FinishingEdits(),
-            ) { Text("Save") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
-}
-
-/** A labelled two-way choice, as a pair of buttons rather than a dropdown nobody can see the state of. */
-@Composable
-private fun <T> ChoiceRow(
-    label: String,
-    options: List<Pair<String, T>>,
-    selected: T?,
-    enabled: Boolean,
-    onSelect: (T) -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(if (selected == null) "$label · Mixed" else label, style = MaterialTheme.typography.bodyMedium)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            options.forEach { (text, value) ->
-                if (value == selected) {
-                    Button(onClick = { onSelect(value) }, enabled = enabled) { Text(text, textAlign = TextAlign.Center) }
-                } else {
-                    OutlinedButton(onClick = { onSelect(value) }, enabled = enabled) { Text(text, textAlign = TextAlign.Center) }
-                }
-            }
-        }
-    }
 }
 
 /**

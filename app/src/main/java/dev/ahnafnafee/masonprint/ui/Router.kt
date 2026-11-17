@@ -118,6 +118,15 @@ class Router(start: Route) {
         push(route)
     }
 
+    /** Finish the printer picker or return to the review that opened it. */
+    fun reviewSelectedPrinter() {
+        when {
+            current != Route.Release -> push(Route.Confirm)
+            stack.getOrNull(stack.lastIndex - 1) == Route.Confirm -> pop()
+            else -> replaceTop(Route.Confirm)
+        }
+    }
+
     fun pop(): Route? {
         if (stack.size <= 1) return null
         stack = stack.dropLast(1)
