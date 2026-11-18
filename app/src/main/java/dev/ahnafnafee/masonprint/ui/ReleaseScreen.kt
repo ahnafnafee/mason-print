@@ -1207,6 +1207,10 @@ fun ReleaseResult(
                 }
             }
 
+            if (outcome.released.isNotEmpty() || outcome.refused.size < outcome.requested || transport != null) {
+                StopPrintingGuide(outcome.printer, state.selectedDevice?.make, state.host, showQuickStep = true)
+            }
+
             FilledTonalButton(
                 onClick = {
                     session.clearOutcome()

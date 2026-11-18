@@ -16,8 +16,6 @@ Before release, select the jobs in the queue, open **More actions**, and choose 
 
 After release, open **Released jobs and cancellation** from the result, then choose **Try to cancel** on the receipt. The app sends `DELETE /printjobs` with `{"PrintJobs":[{"Location":"<original job location>"}]}` through the signed-in Pharos connection. The newest receipt for that location carries the cancellation control. Statement rows have billing information and lack a Pharos job location.
 
-If printing has started, try the printer’s **Stop** or **Status Monitor** controls if they are available for your job. [Canon print job cancellation guide](https://oip.manual.canon/USRMA-5488-zz-CS-5800-enUS/contents/devu-basicope-cancel.html)
-
 The receipt keeps the server's result:
 
 - **Cancellation accepted:** the requested job received an explicit success response. Already printed pages cannot be recalled, and a refund is not guaranteed; check your statement.
@@ -25,6 +23,14 @@ The receipt keeps the server's result:
 - **Cancellation unconfirmed:** no clear acknowledgement for that job arrived. The app does not automatically retry. Check at the printer before deliberately trying again.
 
 GMU can return HTTP 200 with a per-job refusal such as `Status:300` and `ErrorCode:TranslationNotFound`. An SRS “does not exist in the database” response is also a refusal. Each cancellation opens a fresh connection and sends a one-shot body with transport retries and redirects disabled, including OkHttp's response-driven `503 Retry-After: 0` retry.
+
+### Stop the remaining copies at the printer
+
+Open **How to stop at the printer** from the release result or receipt. On the Canon imageRUNNER ADVANCE DX C5800 series, press **Stop** while your job is printing, select the document, and tap **Cancel**. You can also use **Status Monitor → Copy/Print → Job Status**, select your document, and tap **Cancel**. [Canon Stop control](https://oip.manual.canon/USRMA-5488-zz-CS-5800-enUS/contents/devu-basicope-cancel.html) · [Canon Status Monitor guide](https://oip.manual.canon/USRMA-5488-zz-CS-5800-enUS/contents/devu-prt-pc-check_status_log.html)
+
+For a six-copy job, cancel the active document to stop the rest of the job after you have the copy you need. Cancel can stop partway through the next copy. If you only want one proof, release one copy first and hold a separate job for the remaining five until you are ready.
+
+The printer’s access settings can hide jobs or restrict cancellation. If your document is missing or Cancel is unavailable, give the printer name to the staff at the printer or GMU Print Services. [Canon access settings](https://oip.manual.canon/USRMA-5488-zz-CS-5800-enUS/contents/devu-set_reg-mng-dev.html) · [GMU Print Services](https://printandmail.gmu.edu/hours-locations/)
 
 ## How charge checks are bounded
 
