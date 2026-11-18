@@ -117,20 +117,21 @@ internal fun ReleasedJobsContent(
                                         else -> "Cancellation unconfirmed"
                                     }, style = MaterialTheme.typography.labelLarge)
                                     if (state.cancellingReleaseId == record.id) LinearProgressIndicator(Modifier.fillMaxWidth())
-                                    else {
-                                        Text(result.message, style = MaterialTheme.typography.bodyMedium)
-                                        if (result.verdict == CancelVerdict.Refused) {
-                                            Text("If the job is still printing, use the printer’s cancel control if available.",
-                                                style = MaterialTheme.typography.bodySmall)
-                                        }
-                                    }
+                                    else Text(result.message, style = MaterialTheme.typography.bodyMedium)
                                 }
                             }
                         }
-                        if (canAttemptCancellation(state.releaseHistory, record)) OutlinedButton(
-                            onClick = { cancelId = record.id }, enabled = cancellationAvailable,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text(if (record.cancellation == null) "Try to cancel" else "Try to cancel again") }
+                        if (canAttemptCancellation(state.releaseHistory, record)) {
+                            OutlinedButton(
+                                onClick = { cancelId = record.id }, enabled = cancellationAvailable,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text(if (record.cancellation == null) "Try to cancel" else "Try to cancel again") }
+                            val printerMake = state.devices.firstOrNull { it.location == record.printerLocation }?.make
+                            StopPrintingGuide(
+                                record.printerName, printerMake, state.host,
+                                showQuickStep = record.cancellation?.verdict == CancelVerdict.Refused,
+                            )
+                        }
                     }
                 }
             }

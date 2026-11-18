@@ -108,6 +108,8 @@ Open **Released jobs and charges** from the queue to see local release receipts 
 
 For a held job, select it and choose **More actions → Cancel print job**. After release, open **Released jobs and cancellation** from the result and choose **Try to cancel** on the receipt. GMU normally starts printing immediately, so Pharos may refuse the request. The receipt shows the server’s answer. See [release receipts and cancellation limits](docs/PRINTER-STATUS.md).
 
+If the job is already printing, open **How to stop at the printer** from the release result or receipt. Use the printer’s controls to cancel the active job and stop its remaining copies.
+
 <div align="right">
 
 [![][back-to-top]](#readme-top)
